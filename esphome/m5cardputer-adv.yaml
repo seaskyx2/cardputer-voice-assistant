@@ -233,14 +233,25 @@ tca8418_keypad:
                           id(vol_hud_timeout_ms) = millis() + 2000;
                           id(m5display).update();
                     else:
-                      # ===== 最高优先级 3：切换待机桌面视图 (按 'TAB' 键 keycode 11 或 'Fn' 键 keycode 21) =====
+                      # ===== 最高优先级 3：切换待机桌面视图 (按 TAB / Fn / ESC / Ctrl 键) =====
                       - if:
                           condition:
-                            lambda: 'return (id(va_state) == 0) && (keycode == 11 || (row == 1 && col == 0) || keycode == 21 || (row == 2 && col == 0));'
+                            lambda: |-
+                              return (row == 0 && col <= 3) || keycode <= 4 || keycode == 11 || keycode == 21;
                           then:
                             - lambda: |-
+                                if (id(va_state) == 3 || id(va_state) == 2) {
+                                  id(echo_speaker)->stop();
+                                }
+                                id(va_state) = 0;
+                                id(va_status_msg) = "Ready";
+                                id(va_stt_text).clear();
+                                id(va_reply_text).clear();
+                                id(dialog_reset_timeout_ms) = 0;
                                 id(ui_mode) = (id(ui_mode) + 1) % 3;
+                                ESP_LOGI("KEY_SWITCH", "Switch UI Mode -> %d (keycode=%u, r=%u, c=%u)", id(ui_mode), keycode, row, col);
                                 id(m5display).update();
+                            - voice_assistant.stop:
                           else:
                             # ===== 其余按键：按当前状态处理（打断 / 停止录音 / 启动对讲）=====
                             - if:
