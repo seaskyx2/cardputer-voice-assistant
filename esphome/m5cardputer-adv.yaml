@@ -1,0 +1,498 @@
+esphome:
+  name: m5cardputer
+  friendly_name: M5Cardputer Adv
+  includes:
+    - visualizer.h
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(cardputer_adv_dac)->set_volume(id(cardputer_vol));
+          id(external_mic)->add_data_callback([](const std::vector<uint8_t> &data) {
+            visualizer::on_mic_data(data);
+          });
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: custom_components
+    components: [tca8418_keypad]
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_key
+  on_client_connected:
+    - lambda: |-
+        id(va_state) = 0;
+        id(va_status_msg) = "Host Online";
+        id(m5display).update();
+  on_client_disconnected:
+    - lambda: |-
+        id(va_state) = 4;
+        id(va_status_msg) = "Host Disconnected";
+        id(m5display).update();
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "M5Cardputer Fallback Hotspot"
+    password: !secret ap_password
+
+captive_portal:
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Asia/Shanghai
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+
+globals:
+  - id: va_state
+    type: int
+    initial_value: "0" # 0: Ready, 1: Listening, 2: Thinking, 3: Speaking, 4: Error
+  - id: va_status_msg
+    type: std::string
+    initial_value: '"Ready"'
+  - id: va_stt_text
+    type: std::string
+    initial_value: '""'
+  - id: va_reply_text
+    type: std::string
+    initial_value: '""'
+  - id: cardputer_vol
+    type: float
+    initial_value: "0.75"
+    restore_value: true
+  - id: vol_hud_timeout_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: dialog_reset_timeout_ms
+    type: uint32_t
+    initial_value: "0"
+
+color:
+  - id: color_bg
+    hex: "0a0f1d"
+  - id: color_card
+    hex: "151f32"
+  - id: color_card_border
+    hex: "27354f"
+  - id: color_green
+    hex: "10b981"
+  - id: color_cyan
+    hex: "06b6d4"
+  - id: color_blue
+    hex: "3b82f6"
+  - id: color_yellow
+    hex: "f59e0b"
+  - id: color_red
+    hex: "ef4444"
+  - id: color_white
+    hex: "f8fafc"
+  - id: color_gray
+    hex: "94a3b8"
+  - id: color_dim_gray
+    hex: "475569"
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_title
+    size: 16
+  - file: "gfonts://Noto Sans SC"
+    id: font_cn
+    size: 13
+    ignore_missing_glyphs: true
+    glyphs:
+      - ' !"#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_abcdefghijklmnopqrstuvwxyz{|}~'
+      - '一七万三上下不与专且世业丝两严个中丰临为主举久么义之乌乎乏乐乔乙九乞也乡书买乱了予事二于亏云互五些交产京亭亮亲人什仁仅今从他付代令以仪们件价任份仿企休优会伞伟传伤伯伸似但位低住体何余佛作你使來供依便促保信修個倍們倒候借倾假偏做停健偶傅傍傻像儿允元兄充先光克免兔入全公六兰共关兴其具典养内再冒写农冬冰决况冷净准凉减几凭凶出刀分切列则刚初别刮到制刻前剖力办功加务劣动助勺匀包化北匹区医十千升午半华协单卖南卡卧卫印危卸厂厅历压厚原厨去参又及友双反发取受变口古句另只叫召可台史右叶号叹吃各合同名后向吓吗否吧吨含听启吸吹呀呆告员呜周味呼命和咖咬咱响哑哥哪售唯唱商啥喊喜喝嗅器四回因团困围固国图圆圈國土在地场坏坐块坚坡城域基堂塔墙增墨壤士壮声处备复夏夕外多夜够大天太夫央失头夹奇奏奖套女奶她好如妈妥妹妻始姐姑姓委姥威娃娘婆嫩子孔字存孙学孩學它守安完宗宙定宜宝实客宣室害家容宽宿寄密富察實对寻导封射将尊對小少尔尖尘尚尝尤就尾局层居屋屏展属山岁岂岛岩峡峰崖州工左巧巨差己已巾市师希帘带席帮常干平年并广庄庆床序库应底店府度座庭康廊建开弄式弟张弱弹强当录形彩影往待很後徒得微德心必忍志忘忙快念忽怀态怎怕思急性怪总息您悬情想意感愣愿慢慰懂懒戏成我或戴户房所扇手打扔托执扫扬扰扶批找承技抄把抓投抛护报抱押担拉拍拒拜拥拿指按挖挺捉捏损换捧据授掉掌排探接控推掷描提插握搞搬携摄摇摸撒播支收改放政故效敏救教敢散数整文斗料斤断斯新方施旁旅旗无既日旧旨早时明昏易星映春昨是昼显時晒晚晨普景晴智暂暖暗暮暴曲更會月有朋服朗望期木未末本术朵机杀杂权李材村条来杯板极构析林果枝架某柑柜查柱柿标栏树校样核根格桃案桌桥梢梦梯检棕森棵椅楚楼概模樣橘橙機欠次欢欺款歌止正步死段母每比毛毫毯氏民气水汁求汉江池汤汪汽沉沒没河治泉法泡波泥注泼洗洞津洲活流浅济浪浮浴海涂消涉涨淘深清渐温渴游湖湿源溜滑满漂漆漏演潮火灭灯灰灶灾炉点為烂烈烟烧热焦焰然照熊熟燈爬爱父爷爸爹片牌牙牛牢物牵特状狂狗狮猛猫率玉王玩环现現球理瓦瓶甜生用田由甲申电男画界畏留疑疼病症痛瘦登發白百的皮盆盒盘目直相看真眠眼着睛睡瞧矣知短石矿码砂研硬确碗碰磁示礼社祈祖祝神票福离秀私秋种科秒租积称程稍税種稳穷空突窄窗窝立站章童笑符第等答筛筷签简算管箱篇米粉粒粗粮精糖系索紫累經红级纪纯线组细织终绍经结绕绘给络绝统继绪续维绿缀缓编缩缺网置羊美翻耀老考者而耍耳聊聚聽肉肖肥育胃胖能脏脑脱腕腰腿自至與舌舍舒舞舟航良色节芝花芽苍若苦英苹范茶草荣药荷莫菜落著蒙蓄蓝蔚薄虎虑虽蛇蛋蛮蜜蜡融行街衣补表袋袖被装裏西要見见观规觅视览觉解言話說警计认讨让训记讲许论设访评识诉词译试诗话询语说请读课谁调谈谢象豪貌负责败账质购贴贵贸费资赏赔赚赞赠赢走赶起超越趣足跑距跟路跳踢躲躺车转轮软轻载辅输辰边达迁迅过迎运近返还这进远连迟迫述退送适逃选透逐這通造逢進遇遍過道遥那邻郊郎部都酒酬酸醒里重野量金钟钢钱铁铅铜银铸铺锁锅错键镜长開關门闭问间闹闻阅队防阳阴阶阻附际陆陈降限院除陪随隐障难雀雅集雇雨雪雷電雾需霖霜露青静非靠面靴鞋鞘音題页顶项顺顾顿预领频颗题颜风飘飞食餐饭饮饱饿馆首香马验骨體高鱼鲜鸟鸡鸣鸭麦麻麼黄黑點鼻齐'
+
+i2c:
+  sda: GPIO08
+  scl: GPIO09
+  scan: true
+  id: bus_internal
+
+audio_dac:
+  - platform: es8311
+    id: cardputer_adv_dac
+    i2c_id: bus_internal
+    address: 0x18
+    use_mclk: false
+    use_microphone: false
+    mic_gain: 42DB
+    sample_rate: 16000
+    bits_per_sample: 32bit
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO43
+    i2s_bclk_pin: GPIO41
+
+microphone:
+  - platform: i2s_audio
+    id: external_mic
+    i2s_audio_id: i2s_bus
+    adc_type: external
+    i2s_din_pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    pdm: false
+    channel: left
+    bits_per_sample: 32bit
+    sample_rate: 16000
+
+speaker:
+  - platform: i2s_audio
+    id: echo_speaker
+    i2s_audio_id: i2s_bus
+    dac_type: external
+    i2s_dout_pin: GPIO42
+    channel: mono
+    audio_dac: cardputer_adv_dac
+    bits_per_sample: 32bit
+    sample_rate: 16000
+
+tca8418_keypad:
+  id: cardputer_keypad
+  i2c_id: bus_internal
+  address: 0x34
+  rows: 7
+  columns: 8
+  interrupt_pin: GPIO11
+  on_key:
+    - if:
+        condition:
+          lambda: 'return pressed;'
+        then:
+          - if:
+              # ===== 最高优先级 1：减小音量（按 '-' 键 keycode 55，或 '[' 键 keycode 56）=====
+              condition:
+                lambda: 'return keycode == 55 || keycode == 56 || (row == 5 && col == 4) || (row == 5 && col == 5);'
+              then:
+                - lambda: |-
+                    float v = id(cardputer_vol) - 0.05f;
+                    if (v < 0.20f) v = 0.20f;
+                    id(cardputer_vol) = v;
+                    id(cardputer_adv_dac)->set_volume(v);
+                    id(vol_hud_timeout_ms) = millis() + 2000;
+                    id(m5display).update();
+              else:
+                - if:
+                    # ===== 最高优先级 2：增大音量（按 '+' / '=' 键 keycode 61，或 ']' 键 keycode 62）=====
+                    condition:
+                      lambda: 'return keycode == 61 || keycode == 62 || (row == 6 && col == 0) || (row == 6 && col == 1);'
+                    then:
+                      - lambda: |-
+                          float v = id(cardputer_vol) + 0.05f;
+                          if (v > 1.0f) v = 1.0f;
+                          id(cardputer_vol) = v;
+                          id(cardputer_adv_dac)->set_volume(v);
+                          id(vol_hud_timeout_ms) = millis() + 2000;
+                          id(m5display).update();
+                    else:
+                      # ===== 其余按键：按当前状态处理（打断 / 停止录音 / 启动对讲）=====
+                      - if:
+                          condition:
+                            lambda: 'return id(va_state) == 3 || id(va_state) == 2;'
+                          then:
+                            - lambda: |-
+                                id(echo_speaker)->stop();
+                                id(va_state) = 0;
+                                id(va_status_msg) = "Interrupted";
+                                id(va_stt_text).clear();
+                                id(va_reply_text).clear();
+                                id(dialog_reset_timeout_ms) = 0;
+                                id(m5display).update();
+                            - voice_assistant.stop:
+                          else:
+                            - if:
+                                condition:
+                                  lambda: 'return id(va_state) == 1;'
+                                then:
+                                  - voice_assistant.stop:
+                                else:
+                                  - lambda: |-
+                                      id(va_stt_text).clear();
+                                      id(va_reply_text).clear();
+                                      id(dialog_reset_timeout_ms) = 0;
+                                  - voice_assistant.start:
+                                      silence_detection: true
+
+spi:
+  clk_pin: GPIO36
+  mosi_pin: GPIO35
+  miso_pin: GPIO39
+
+display:
+  platform: st7789v
+  model: TTGO TDisplay 135x240
+  id: m5display
+  backlight_pin: GPIO38
+  cs_pin: GPIO37
+  dc_pin: GPIO34
+  reset_pin: GPIO33
+  rotation: 90
+  update_interval: 100ms
+  lambda: |-
+    // 1. 全屏深色清屏
+    it.fill(id(color_bg));
+
+    // 2. 顶部状态栏 (Y: 0 ~ 20)
+    it.filled_rectangle(0, 0, 240, 20, id(color_card));
+    it.line(0, 20, 240, 20, id(color_card_border));
+
+    int st = id(va_state);
+    if (st == 1) {
+      it.filled_circle(10, 10, 3, id(color_cyan));
+      it.print(18, 3, id(font_cn), id(color_cyan), "LISTENING 录音对讲中");
+    } else if (st == 2) {
+      it.filled_circle(10, 10, 3, id(color_yellow));
+      it.print(18, 3, id(font_cn), id(color_yellow), "THINKING 本地AI处理");
+    } else if (st == 3) {
+      it.filled_circle(10, 10, 3, id(color_green));
+      it.print(18, 3, id(font_cn), id(color_green), "SPEAKING 正在播报");
+    } else if (st == 4) {
+      it.filled_circle(10, 10, 3, id(color_red));
+      it.print(18, 3, id(font_cn), id(color_red), "ERROR 对话超时");
+    } else {
+      it.filled_circle(10, 10, 3, id(color_gray));
+      it.print(18, 3, id(font_cn), id(color_gray), "READY 本地待命");
+    }
+    it.strftime(186, 3, id(font_cn), id(color_gray), "%H:%M:%S", id(sntp_time).now());
+
+    // 3. 核心主内容区 (Y: 22 ~ 112)
+    if (st == 1) {
+      // ===== 录音中：真实物理麦克风波形 =====
+      visualizer::update_bars(true);
+
+      it.print(24, 25, id(font_cn), id(color_white), "正在倾听... 请直接说话");
+
+      // 绘制 18 根对称音频柱 (从 Y: 64 基线上下展开)
+      int start_x = 23;
+      int baseline_y = 66;
+      for (int i = 0; i < visualizer::NUM_BARS; i++) {
+        int h = (int)visualizer::bar_heights[i];
+        if (h < 2) h = 2;
+        int bar_x = start_x + i * 11;
+        it.filled_rectangle(bar_x, baseline_y - h, 7, h * 2, id(color_cyan));
+        // 高能量顶部点缀亮绿
+        if (h > 12) {
+          it.filled_rectangle(bar_x, baseline_y - h, 7, 3, id(color_green));
+          it.filled_rectangle(bar_x, baseline_y + h - 3, 7, 3, id(color_green));
+        }
+      }
+
+      it.print(16, 96, id(font_cn), id(color_gray), "停顿自动发送 / 点按任意键发送");
+
+    } else if (st == 2) {
+      // ===== 思考中：秒表计数 + 流光扫描 + 转写文本 =====
+      visualizer::update_bars(false);
+
+      float sec = (millis() - visualizer::think_start_ms) / 1000.0f;
+      char sec_buf[40];
+      snprintf(sec_buf, sizeof(sec_buf), "本地推理中... %.1fs", sec);
+      it.print(24, 25, id(font_cn), id(color_yellow), sec_buf);
+
+      // 显示转写出的文字
+      if (!id(va_stt_text).empty()) {
+        it.filled_rectangle(10, 44, 220, 26, id(color_card));
+        it.rectangle(10, 44, 220, 26, id(color_card_border));
+        std::string txt = "你: " + id(va_stt_text);
+        if (txt.size() > 36) txt = txt.substr(0, 33) + "...";
+        it.print(16, 49, id(font_cn), id(color_white), txt.c_str());
+      } else {
+        it.print(30, 49, id(font_cn), id(color_gray), "Whisper 中文转写中...");
+      }
+
+      // 动态流光雷达扫描条 (Y: 76 ~ 84)
+      it.filled_rectangle(20, 78, 200, 6, id(color_card));
+      it.rectangle(20, 78, 200, 6, id(color_card_border));
+      int scan_x = visualizer::get_scanner_x(160, millis());
+      it.filled_rectangle(20 + scan_x, 78, 40, 6, id(color_cyan));
+
+      it.print(30, 96, id(font_cn), id(color_dim_gray), "Faster-Whisper -> Phi-4-mini");
+
+    } else if (st == 3) {
+      // ===== 语音播报中：展示识别原话与回答 =====
+      visualizer::update_bars(false);
+
+      it.filled_rectangle(8, 24, 224, 40, id(color_card));
+      it.rectangle(8, 24, 224, 40, id(color_card_border));
+      std::string u_txt = "你: " + id(va_stt_text);
+      if (u_txt.size() > 36) u_txt = u_txt.substr(0, 33) + "...";
+      it.print(14, 34, id(font_cn), id(color_cyan), u_txt.c_str());
+
+      it.filled_rectangle(8, 68, 224, 40, id(color_card));
+      it.rectangle(8, 68, 224, 40, id(color_card_border));
+      std::string a_txt = "AI: " + id(va_reply_text);
+      if (a_txt.size() > 36) a_txt = a_txt.substr(0, 33) + "...";
+      it.print(14, 78, id(font_cn), id(color_green), a_txt.c_str());
+
+    } else {
+      // ===== 就绪状态 (READY / 4 ERROR) =====
+      visualizer::update_bars(false);
+
+      if (id(dialog_reset_timeout_ms) > 0 && millis() >= id(dialog_reset_timeout_ms)) {
+        id(va_stt_text).clear();
+        id(va_reply_text).clear();
+        id(va_state) = 0;
+        id(dialog_reset_timeout_ms) = 0;
+      }
+
+      if (!id(va_stt_text).empty() && !id(va_reply_text).empty()) {
+        // 保留显示上一轮对话结果 (5秒内)
+        it.filled_rectangle(8, 24, 224, 40, id(color_card));
+        it.rectangle(8, 24, 224, 40, id(color_card_border));
+        std::string u_txt = "你: " + id(va_stt_text);
+        if (u_txt.size() > 36) u_txt = u_txt.substr(0, 33) + "...";
+        it.print(14, 34, id(font_cn), id(color_gray), u_txt.c_str());
+
+        it.filled_rectangle(8, 68, 224, 40, id(color_card));
+        it.rectangle(8, 68, 224, 40, id(color_card_border));
+        std::string a_txt = "AI: " + id(va_reply_text);
+        if (a_txt.size() > 36) a_txt = a_txt.substr(0, 33) + "...";
+        it.print(14, 78, id(font_cn), id(color_green), a_txt.c_str());
+
+        // 倒计时指示微条 (青色逐渐缩短)
+        if (id(dialog_reset_timeout_ms) > millis()) {
+          uint32_t rem = id(dialog_reset_timeout_ms) - millis();
+          int w = (int)(224 * rem / 5000);
+          if (w > 224) w = 224;
+          if (w > 0) it.filled_rectangle(8, 110, w, 2, id(color_cyan));
+        }
+      } else {
+        it.filled_rectangle(14, 32, 212, 68, id(color_card));
+        it.rectangle(14, 32, 212, 68, id(color_card_border));
+        it.print(32, 42, id(font_cn), id(color_white), "按任意键 / 空格 / G0");
+        it.print(46, 64, id(font_cn), id(color_cyan), "开始说话对讲");
+        it.print(34, 84, id(font_cn), id(color_dim_gray), "按 -/+ 调节扬声器音量");
+      }
+    }
+
+    // 4. 底部栏 (Y: 114 ~ 134)
+    it.filled_rectangle(0, 114, 240, 21, id(color_card));
+    it.line(0, 114, 240, 114, id(color_card_border));
+    it.print(6, 117, id(font_cn), id(color_dim_gray), "HA Voice");
+    char v_str[24];
+    snprintf(v_str, sizeof(v_str), "音量: %d%%", (int)(id(cardputer_vol) * 100.0f + 0.5f));
+    it.print(115, 117, id(font_cn), id(color_yellow), v_str);
+    it.print(195, 117, id(font_cn), id(color_green), "离线");
+
+    // 5. 音量浮层 HUD (按 - / + 键时弹出)
+    if (millis() < id(vol_hud_timeout_ms)) {
+      it.filled_rectangle(35, 40, 170, 48, id(color_card));
+      it.rectangle(35, 40, 170, 48, id(color_cyan));
+      int vol_pct = (int)(id(cardputer_vol) * 100.0f + 0.5f);
+      char hud_buf[32];
+      snprintf(hud_buf, sizeof(hud_buf), "扬声器音量: %d%%", vol_pct);
+      it.print(48, 46, id(font_cn), id(color_white), hud_buf);
+      it.filled_rectangle(50, 68, 140, 8, id(color_bg));
+      it.filled_rectangle(50, 68, (int)(140 * id(cardputer_vol)), 8, id(color_cyan));
+    }
+
+voice_assistant:
+  id: va_comp
+  microphone: external_mic
+  speaker: echo_speaker
+  noise_suppression_level: 2
+  auto_gain: 15dBFS
+  volume_multiplier: 1.0
+  conversation_timeout: 15s
+  on_start:
+    - lambda: |-
+        id(va_state) = 1;
+        id(va_status_msg) = "Listening";
+        id(dialog_reset_timeout_ms) = 0;
+  on_listening:
+    - lambda: |-
+        id(va_state) = 1;
+  on_stt_vad_end:
+    - lambda: |-
+        id(va_state) = 2;
+        visualizer::think_start_ms = millis();
+  on_stt_end:
+    - lambda: |-
+        id(va_state) = 2;
+        id(va_stt_text) = x;
+  on_tts_start:
+    - lambda: |-
+        id(va_state) = 3;
+        id(va_reply_text) = x;
+  on_end:
+    - lambda: |-
+        id(va_state) = 0;
+        id(dialog_reset_timeout_ms) = millis() + 5000;
+  on_error:
+    - lambda: |-
+        id(va_state) = 4;
+        id(va_status_msg) = "Error";
+        id(dialog_reset_timeout_ms) = millis() + 3000;
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO00
+      inverted: true
+      ignore_strapping_warning: true
+    name: "G0 Button"
+    id: echo_button
+    on_press:
+      - if:
+          condition:
+            lambda: 'return id(va_state) == 3 || id(va_state) == 2;'
+          then:
+            - lambda: |-
+                id(echo_speaker)->stop();
+                id(va_state) = 0;
+                id(va_status_msg) = "Interrupted";
+                id(va_stt_text).clear();
+                id(va_reply_text).clear();
+                id(dialog_reset_timeout_ms) = 0;
+                id(m5display).update();
+            - voice_assistant.stop:
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(va_state) == 1;'
+                then:
+                  - voice_assistant.stop:
+                else:
+                  - lambda: |-
+                      id(va_stt_text).clear();
+                      id(va_reply_text).clear();
+                      id(dialog_reset_timeout_ms) = 0;
+                  - voice_assistant.start:
+                      silence_detection: true
+
+number:
+  - platform: template
+    name: "Cardputer Speaker Volume"
+    id: cardputer_volume_ctrl
+    min_value: 0.2
+    max_value: 1.0
+    step: 0.05
+    initial_value: 0.75
+    restore_value: true
+    optimistic: true
+    set_action:
+      - lambda: |-
+          id(cardputer_vol) = x;
+          id(cardputer_adv_dac)->set_volume(x);
+          id(vol_hud_timeout_ms) = millis() + 2000;
+          id(m5display).update();

@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # 1. Home Assistant Core (Smart Home Hub)
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    volumes:
+      - ./ha-config:/config
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Shanghai
+
+  # 2. Wyoming Faster-Whisper (Local STT)
+  whisper:
+    image: rhasspy/wyoming-faster-whisper:latest
+    container_name: wyoming-whisper
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --model
+      - small
+      - --language
+      - zh
+      - --initial-prompt
+      - "普通话简体中文"
+      - --uri
+      - tcp://0.0.0.0:10300
+      - --data-dir
+      - /data
+    volumes:
+      - ./whisper-data:/data
+    environment:
+      - TZ=Asia/Shanghai
+
+  # 3. Wyoming Piper (Local TTS)
+  piper:
+    image: rhasspy/wyoming-piper:latest
+    container_name: wyoming-piper
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --voice
+      - zh_CN-huayan-medium
+      - --uri
+      - tcp://0.0.0.0:10200
+      - --data-dir
+      - /data
+    volumes:
+      - ./piper-data:/data
+    environment:
+      - TZ=Asia/Shanghai
+
+  # 4. Ollama (Local SLM/LLM Inference Engine)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./ollama-data:/root/.ollama
+    environment:
+      - TZ=Asia/Shanghai
+
+  # 5. AI Legion Gateway (Home Assistant Tool Dispatcher & Bridge)
+  ai-legion:
+    build: ./ai-legion
+    container_name: ai-legion
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - homeassistant
+      - ollama
+    environment:
+      - HA_URL=http://127.0.0.1:8123
+      - HA_TOKEN=${HA_TOKEN}
+      - OLLAMA_URL=http://127.0.0.1:11434
+      - DEFAULT_MODEL=phi4-mini
+      - PORT=8096

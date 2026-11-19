@@ -1,0 +1,17 @@
+# ESPHome build & credentials
+.esphome/
+*.bin
+*.elf
+*.factory.bin
+secrets.yaml
+
+# Python & Environment
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# OS Files
+.DS_Store
+Thumbs.db
