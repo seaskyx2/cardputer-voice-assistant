@@ -1,25 +1,30 @@
 version: '3.8'
 
 services:
-  # 1. Home Assistant Core (Smart Home Hub)
+  # 1. Home Assistant Core (智能家居控制中枢)
   homeassistant:
     image: ghcr.io/home-assistant/home-assistant:stable
     container_name: homeassistant
     restart: unless-stopped
     privileged: true
-    network_mode: host
+    # Linux 推荐开启 network_mode: host 以获得最佳 mDNS 设备自动发现体验；
+    # macOS / Windows 用户请保持使用下方的 ports 端口映射。
+    # network_mode: host
+    ports:
+      - "8123:8123"
     volumes:
       - ./ha-config:/config
       - /etc/localtime:/etc/localtime:ro
     environment:
-      - TZ=Asia/Shanghai
+      - TZ=${TZ:-Asia/Shanghai}
 
-  # 2. Wyoming Faster-Whisper (Local STT)
+  # 2. Wyoming Faster-Whisper (本地语音转文字 STT)
   whisper:
     image: rhasspy/wyoming-faster-whisper:latest
     container_name: wyoming-whisper
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "10300:10300"
     command:
       - --model
       - small
@@ -34,14 +39,15 @@ services:
     volumes:
       - ./whisper-data:/data
     environment:
-      - TZ=Asia/Shanghai
+      - TZ=${TZ:-Asia/Shanghai}
 
-  # 3. Wyoming Piper (Local TTS)
+  # 3. Wyoming Piper (本地高质量语音合成 TTS)
   piper:
     image: rhasspy/wyoming-piper:latest
     container_name: wyoming-piper
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "10200:10200"
     command:
       - --voice
       - zh_CN-huayan-medium
@@ -52,31 +58,33 @@ services:
     volumes:
       - ./piper-data:/data
     environment:
-      - TZ=Asia/Shanghai
+      - TZ=${TZ:-Asia/Shanghai}
 
-  # 4. Ollama (Local SLM/LLM Inference Engine)
+  # 4. Ollama (端侧轻量级大模型推理引擎)
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "11434:11434"
     volumes:
       - ./ollama-data:/root/.ollama
     environment:
-      - TZ=Asia/Shanghai
+      - TZ=${TZ:-Asia/Shanghai}
 
-  # 5. AI Legion Gateway (Home Assistant Tool Dispatcher & Bridge)
+  # 5. AI Legion 动作调度网关 (连接 HA 实体工具与本地大模型)
   ai-legion:
     build: ./ai-legion
     container_name: ai-legion
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "8096:8096"
     depends_on:
       - homeassistant
       - ollama
     environment:
-      - HA_URL=http://127.0.0.1:8123
+      - HA_URL=http://homeassistant:8123
       - HA_TOKEN=${HA_TOKEN}
-      - OLLAMA_URL=http://127.0.0.1:11434
-      - DEFAULT_MODEL=phi4-mini
+      - OLLAMA_URL=http://ollama:11434
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-phi4-mini}
       - PORT=8096
