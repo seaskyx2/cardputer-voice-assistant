@@ -81,4 +81,28 @@ inline int get_scanner_x(int width, uint32_t ms) {
   return (phase * 2 * width) / period;
 }
 
+// 严谨的 UTF-8 中文双行平滑拆分算法 (防止汉字字节腰斩乱码)
+inline void split_cn_text(const std::string &in, std::string &l1, std::string &l2, size_t max_bytes = 42) {
+  if (in.size() <= max_bytes) {
+    l1 = in;
+    l2 = "";
+    return;
+  }
+  size_t pos = max_bytes;
+  while (pos > 0 && (static_cast<uint8_t>(in[pos]) & 0xC0) == 0x80) {
+    pos--;
+  }
+  l1 = in.substr(0, pos);
+  std::string rem = in.substr(pos);
+  if (rem.size() <= max_bytes) {
+    l2 = rem;
+  } else {
+    size_t p2 = max_bytes;
+    while (p2 > 0 && (static_cast<uint8_t>(rem[p2]) & 0xC0) == 0x80) {
+      p2--;
+    }
+    l2 = rem.substr(0, p2) + "...";
+  }
+}
+
 } // namespace visualizer
