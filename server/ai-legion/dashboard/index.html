@@ -218,6 +218,7 @@
         <span class="quick-pill" onclick="fillAndRun('记一下，社保卡放在书房第二个抽屉')">写入记忆：社保卡位置 (L1)</span>
         <span class="quick-pill" onclick="fillAndRun('我社保卡放哪了')">召回记忆：社保卡在哪 (L1 RAG)</span>
         <span class="quick-pill" onclick="fillAndRun('把小米指示灯关闭，过3秒再打开')">异步时序控家 (L2 Qwen3)</span>
+        <span class="quick-pill" style="border-color:rgba(245,158,11,.45); color:var(--yellow);" onclick="pushCardputer()">⚡ 反向唤醒 Cardputer 弹窗</span>
       </div>
       <div class="console-out" id="console-out">等待指令输入...</div>
     </section>
@@ -422,6 +423,18 @@
     function fillAndRun(text) {
       document.getElementById('cmd-input').value = text;
       runCmd();
+    }
+
+    async function pushCardputer() {
+      const out = document.getElementById('console-out');
+      out.textContent = '正在向 Cardputer-Adv 推送反向唤醒通知...';
+      const res = await fetchJSON('/api/notify_cardputer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'AI Legion 战报', message: 'nuctutu 集群在线，SenseVoice + Qwen3-4B 待命中' })
+      });
+      out.textContent = res.ok ? '已成功反向点亮 Cardputer 屏幕并弹出通知卡片！' : ('推送失败: ' + res.detail);
+      loadTelemetry();
     }
 
     async function runCmd() {

@@ -10,6 +10,7 @@ esphome:
           id(cardputer_adv_dac)->set_volume(id(cardputer_vol));
           id(last_activity_ms) = millis();
           id(disp_backlight)->turn_on().set_brightness(1.0f).perform();
+          visualizer::imu.init(id(bus_internal));
           id(external_mic)->add_data_callback([](const std::vector<uint8_t> &data) {
             visualizer::on_mic_data(data);
           });
@@ -31,6 +32,21 @@ logger:
 api:
   encryption:
     key: !secret api_key
+  services:
+    - service: notify_alert
+      variables:
+        title: string
+        message: string
+      then:
+        - lambda: |-
+            id(alert_title) = title;
+            id(alert_msg) = message;
+            id(alert_timeout_ms) = millis() + 8000;
+            id(last_activity_ms) = millis();
+            id(is_sleeping) = false;
+            id(is_dimmed) = false;
+            id(disp_backlight)->turn_on().set_brightness(1.0f).perform();
+            id(m5display).update();
   on_client_connected:
     - lambda: |-
         id(va_state) = 0;
@@ -104,7 +120,16 @@ globals:
     initial_value: "0"
   - id: ui_mode
     type: int
-    initial_value: "0" # 0: 语音脉冲, 1: 全屋环境气象, 2: 硬件系统雷达与水平仪
+    initial_value: "0" # 0: 语音脉冲, 1: 桌面副屏与备忘, 2: 集群算力雷达
+  - id: alert_title
+    type: std::string
+    initial_value: '""'
+  - id: alert_msg
+    type: std::string
+    initial_value: '""'
+  - id: alert_timeout_ms
+    type: uint32_t
+    initial_value: "0"
 
 color:
   - id: color_bg
@@ -140,7 +165,7 @@ font:
     ignore_missing_glyphs: true
     glyphs:
       - ' !"#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_abcdefghijklmnopqrstuvwxyz{|}~'
-      - '一七万三上下不与专且世业丝两严个中丰临为主举久么义之乌乎乏乐乔乙九乞也乡书买乱了予事二于亏云互五些交产京亭亮亲人什仁仅今从他付代令以仪们件价任份仿企休优会伞伟传伤伯伸似但位低住体何余佛作你使來供依便促保信修個倍們倒候借倾假偏做停健偶傅傍傻像儿允元兄充先光克免兔入全公六兰共关兴其具典养内再冒写农冬冰决况冷净准凉减几凭凶出刀分切列则刚初别刮到制刻前剖力办功加务劣动助勺匀包化北匹区医十千升午半华协单卖南卡卧卫印危卸厂厅历压厚原厨去参又及友双反发取受变口古句另只叫召可台史右叶号叹吃各合同名后向吓吗否吧吨含听启吸吹呀呆告员呜周味呼命和咖咬咱响哑哥哪售唯唱商啥喊喜喝嗅器四回因团困围固国图圆圈國土在地场坏坐块坚坡城域基堂塔墙增墨壤士壮声处备复夏夕外多夜够大天太夫央失头夹奇奏奖套女奶她好如妈妥妹妻始姐姑姓委姥威娃娘婆嫩子孔字存孙学孩學它守安完宗宙定宜宝实客宣室害家容宽宿寄密富察實对寻导封射将尊對小少尔尖尘尚尝尤就尾局层居屋屏展属山岁岂岛岩峡峰崖州工左巧巨差己已巾市师希帘带席帮常干平年并广庄庆床序库应底店府度座庭康廊建开弄式弟张弱弹强当录形彩影往待很後徒得微德心必忍志忘忙快念忽怀态怎怕思急性怪总息您悬情想意感愣愿慢慰懂懒戏成我或戴户房所扇手打扔托执扫扬扰扶批找承技抄把抓投抛护报抱押担拉拍拒拜拥拿指按挖挺捉捏损换捧据授掉掌排探接控推掷描提插握搞搬携摄摇摸撒播支收改放政故效敏救教敢散数整文斗料斤断斯新方施旁旅旗无既日旧旨早时明昏易星映春昨是昼显時晒晚晨普景晴智暂暖暗暮暴曲更會月有朋服朗望期木未末本术朵机杀杂权李材村条来杯板极构析林果枝架某柑柜查柱柿标栏树校样核根格桃案桌桥梢梦梯检棕森棵椅楚楼概模樣橘橙機欠次欢欺款歌止正步死段母每比毛毫毯氏民气水汁求汉江池汤汪汽沉沒没河治泉法泡波泥注泼洗洞津洲活流浅济浪浮浴海涂消涉涨淘深清渐温渴游湖湿源溜滑满漂漆漏演潮火灭灯灰灶灾炉点為烂烈烟烧热焦焰然照熊熟燈爬爱父爷爸爹片牌牙牛牢物牵特状狂狗狮猛猫率玉王玩环现現球理瓦瓶甜生用田由甲申电男画界畏留疑疼病症痛瘦登發白百的皮盆盒盘目直相看真眠眼着睛睡瞧矣知短石矿码砂研硬确碗碰磁示礼社祈祖祝神票福离秀私秋种科秒租积称程稍税種稳穷空突窄窗窝立站章童笑符第等答筛筷签简算管箱篇米粉粒粗粮精糖系索紫累經红级纪纯线组细织终绍经结绕绘给络绝统继绪续维绿缀缓编缩缺网置羊美翻耀老考者而耍耳聊聚聽肉肖肥育胃胖能脏脑脱腕腰腿自至與舌舍舒舞舟航良色节芝花芽苍若苦英苹范茶草荣药荷莫菜落著蒙蓄蓝蔚薄虎虑虽蛇蛋蛮蜜蜡融行街衣补表袋袖被装裏西要見见观规觅视览觉解言話說警计认讨让训记讲许论设访评识诉词译试诗话询语说请读课谁调谈谢象豪貌负责败账质购贴贵贸费资赏赔赚赞赠赢走赶起超越趣足跑距跟路跳踢躲躺车转轮软轻载辅输辰边达迁迅过迎运近返还这进远连迟迫述退送适逃选透逐這通造逢進遇遍過道遥那邻郊郎部都酒酬酸醒里重野量金钟钢钱铁铅铜银铸铺锁锅错键镜长開關门闭问间闹闻阅队防阳阴阶阻附际陆陈降限院除陪随隐障难雀雅集雇雨雪雷電雾需霖霜露青静非靠面靴鞋鞘音題页顶项顺顾顿预领频颗题颜风飘飞食餐饭饮饱饿馆首香马验骨體高鱼鲜鸟鸡鸣鸭麦麻麼黄黑點鼻齐折境闲姿堆副侧冲刷博即吐吞唤型屉抽挥最松版省端群脉触误赛速'
+      - '一七万三上下不与专且世业丝两严个中丰临为主举久么义之乌乎乏乐乔乙九乞也乡书买乱了予事二于亏云互五些交产京亭亮亲人什仁仅今从他付代令以仪们件价任份仿企休优会伞伟传伤伯伸似但位低住体何余佛作你使來供依便促保信修個倍們倒候借倾假偏做停健偶傅傍傻像儿允元兄充先光克免兔入全公六兰共关兴其具典养内再冒写农冬冰决况冷净准凉减几凭凶出刀分切列则刚初别刮到制刻前剖力办功加务劣动助勺匀包化北匹区医十千升午半华协单卖南卡卧卫印危卸厂厅历压厚原厨去参又及友双反发取受变口古句另只叫召可台史右叶号叹吃各合同名后向吓吗否吧吨含听启吸吹呀呆告员呜周味呼命和咖咬咱响哑哥哪售唯唱商啥喊喜喝嗅器四回因团困围固国图圆圈國土在地场坏坐块坚坡城域基堂塔墙增墨壤士壮声处备复夏夕外多夜够大天太夫央失头夹奇奏奖套女奶她好如妈妥妹妻始姐姑姓委姥威娃娘婆嫩子孔字存孙学孩學它守安完宗宙定宜宝实客宣室害家容宽宿寄密富察實对寻导封射将尊對小少尔尖尘尚尝尤就尾局层居屋屏展属山岁岂岛岩峡峰崖州工左巧巨差己已巾市师希帘带席帮常干平年并广庄庆床序库应底店府度座庭康廊建开弄式弟张弱弹强当录形彩影往待很後徒得微德心必忍志忘忙快念忽怀态怎怕思急性怪总息您悬情想意感愣愿慢慰懂懒戏成我或戴户房所扇手打扔托执扫扬扰扶批找承技抄把抓投抛护报抱押担拉拍拒拜拥拿指按挖挺捉捏损换捧据授掉掌排探接控推掷描提插握搞搬携摄摇摸撒播支收改放政故效敏救教敢散数整文斗料斤断斯新方施旁旅旗无既日旧旨早时明昏易星映春昨是昼显時晒晚晨普景晴智暂暖暗暮暴曲更會月有朋服朗望期木未末本术朵机杀杂权李材村条来杯板极构析林果枝架某柑柜查柱柿标栏树校样核根格桃案桌桥梢梦梯检棕森棵椅楚楼概模樣橘橙機欠次欢欺款歌止正步死段母每比毛毫毯氏民气水汁求汉江池汤汪汽沉沒没河治泉法泡波泥注泼洗洞津洲活流浅济浪浮浴海涂消涉涨淘深清渐温渴游湖湿源溜滑满漂漆漏演潮火灭灯灰灶灾炉点為烂烈烟烧热焦焰然照熊熟燈爬爱父爷爸爹片牌牙牛牢物牵特状狂狗狮猛猫率玉王玩环现現球理瓦瓶甜生用田由甲申电男画界畏留疑疼病症痛瘦登發白百的皮盆盒盘目直相看真眠眼着睛睡瞧矣知短石矿码砂研硬确碗碰磁示礼社祈祖祝神票福离秀私秋种科秒租积称程稍税種稳穷空突窄窗窝立站章童笑符第等答筛筷签简算管箱篇米粉粒粗粮精糖系索紫累經红级纪纯线组细织终绍经结绕绘给络绝统继绪续维绿缀缓编缩缺网置羊美翻耀老考者而耍耳聊聚聽肉肖肥育胃胖能脏脑脱腕腰腿自至與舌舍舒舞舟航良色节芝花芽苍若苦英苹范茶草荣药荷莫菜落著蒙蓄蓝蔚薄虎虑虽蛇蛋蛮蜜蜡融行街衣补表袋袖被装裏西要見见观规觅视览觉解言話說警计认讨让训记讲许论设访评识诉词译试诗话询语说请读课谁调谈谢象豪貌负责败账质购贴贵贸费资赏赔赚赞赠赢走赶起超越趣足跑距跟路跳踢躲躺车转轮软轻载辅输辰边达迁迅过迎运近返还这进远连迟迫述退送适逃选透逐這通造逢進遇遍過道遥那邻郊郎部都酒酬酸醒里重野量金钟钢钱铁铅铜银铸铺锁锅错键镜长開關门闭问间闹闻阅队防阳阴阶阻附际陆陈降限院除陪随隐障难雀雅集雇雨雪雷電雾需霖霜露青静非靠面靴鞋鞘音題页顶项顺顾顿预领频颗题颜风飘飞食餐饭饮饱饿馆首香马验骨體高鱼鲜鸟鸡鸣鸭麦麻麼黄黑點鼻齐折境闲姿堆副侧冲刷博即吐吞唤型屉抽挥最松版省端群脉触误赛速宏幕异扣操朝熄监瞬'
 
 i2c:
   sda: GPIO08
@@ -244,7 +269,7 @@ tca8418_keypad:
                                 id(vol_hud_timeout_ms) = millis() + 2000;
                                 id(m5display).update();
                           else:
-                            # ===== 最高优先级 3：切换待机桌面视图 (严格限定左侧第一列 ESC/TAB/Fn/Ctrl: row==0, col<=3) =====
+                            # ===== 最高优先级 3：切换待机桌面视图 (左侧第一列 ESC/TAB/Fn/Ctrl: row==0, col<=3) =====
                             - if:
                                 condition:
                                   lambda: 'return (row == 0 && col <= 3);'
@@ -261,38 +286,75 @@ tca8418_keypad:
                                       id(va_status_msg) = "Ready";
                                       id(va_stt_text).clear();
                                       id(va_reply_text).clear();
+                                      id(alert_timeout_ms) = 0;
                                       id(dialog_reset_timeout_ms) = 0;
                                       id(ui_mode) = (id(ui_mode) + 1) % 3;
                                       id(m5display).update();
                                 else:
-                                  # ===== 其余按键：按当前状态处理（打断 / 停止录音 / 启动对讲）=====
+                                  # ===== 物理宏键 1 (row=0, col=4)：一键全屋熄灯 =====
                                   - if:
                                       condition:
-                                        lambda: 'return id(va_state) == 3 || id(va_state) == 2;'
+                                        lambda: 'return (id(va_state) == 0) && (row == 0 && col == 4);'
                                       then:
+                                        - homeassistant.service:
+                                            service: light.turn_off
+                                            data:
+                                              entity_id: all
                                         - lambda: |-
-                                            id(echo_speaker)->stop();
-                                            id(va_state) = 0;
-                                            id(va_status_msg) = "Interrupted";
-                                            id(va_stt_text).clear();
-                                            id(va_reply_text).clear();
-                                            id(dialog_reset_timeout_ms) = 0;
+                                            id(alert_title) = "物理宏 [1]";
+                                            id(alert_msg) = "已下发一键全屋熄灯指令";
+                                            id(alert_timeout_ms) = millis() + 2500;
                                             id(m5display).update();
-                                        - voice_assistant.stop:
                                       else:
+                                        # ===== 物理宏键 2 (row=1, col=0)：一键专注息屏静音 =====
                                         - if:
                                             condition:
-                                              lambda: 'return id(va_state) == 1;'
+                                              lambda: 'return (id(va_state) == 0) && (row == 1 && col == 0);'
                                             then:
-                                              - voice_assistant.stop:
-                                            else:
                                               - lambda: |-
-                                                  id(va_stt_text).clear();
-                                                  id(va_reply_text).clear();
-                                                  id(dialog_reset_timeout_ms) = 0;
-                                                  id(key_press_start_ms) = millis();
-                                              - voice_assistant.start:
-                                                  silence_detection: true
+                                                  id(echo_speaker)->stop();
+                                                  id(is_sleeping) = true;
+                                                  id(is_dimmed) = false;
+                                                  id(disp_backlight)->turn_off().perform();
+                                            else:
+                                              # ===== 物理宏键 3 (row=1, col=4)：一键直达集群算力监控 =====
+                                              - if:
+                                                  condition:
+                                                    lambda: 'return (id(va_state) == 0) && (row == 1 && col == 4);'
+                                                  then:
+                                                    - lambda: |-
+                                                        id(ui_mode) = 2;
+                                                        id(alert_timeout_ms) = 0;
+                                                        id(m5display).update();
+                                                  else:
+                                                    # ===== 其余按键：按当前状态处理（打断 / 停止录音 / 启动对讲）=====
+                                                    - if:
+                                                        condition:
+                                                          lambda: 'return id(va_state) == 3 || id(va_state) == 2;'
+                                                        then:
+                                                          - lambda: |-
+                                                              id(echo_speaker)->stop();
+                                                              id(va_state) = 0;
+                                                              id(va_status_msg) = "Interrupted";
+                                                              id(va_stt_text).clear();
+                                                              id(va_reply_text).clear();
+                                                              id(dialog_reset_timeout_ms) = 0;
+                                                              id(m5display).update();
+                                                          - voice_assistant.stop:
+                                                        else:
+                                                          - if:
+                                                              condition:
+                                                                lambda: 'return id(va_state) == 1;'
+                                                              then:
+                                                                - voice_assistant.stop:
+                                                              else:
+                                                                - lambda: |-
+                                                                    id(va_stt_text).clear();
+                                                                    id(va_reply_text).clear();
+                                                                    id(dialog_reset_timeout_ms) = 0;
+                                                                    id(key_press_start_ms) = millis();
+                                                                - voice_assistant.start:
+                                                                    silence_detection: true
         else:
           # ===== 按键松开事件 (长按 PTT 模式：按住说话，松手即发) =====
           - if:
@@ -306,6 +368,27 @@ tca8418_keypad:
                   return false;
               then:
                 - voice_assistant.stop:
+
+
+interval:
+  - interval: 200ms
+    then:
+      - lambda: |-
+          int gesture = visualizer::imu.poll(id(bus_internal), id(is_sleeping));
+          if (gesture == 1) {
+            // 屏幕朝下翻扣桌面 -> 瞬间静音息屏
+            id(echo_speaker)->stop();
+            id(is_sleeping) = true;
+            id(is_dimmed) = false;
+            id(disp_backlight)->turn_off().perform();
+          } else if (gesture == 2) {
+            // 从桌面拿起或翻正 -> 0ms 自动亮屏唤醒
+            id(last_activity_ms) = millis();
+            id(is_sleeping) = false;
+            id(is_dimmed) = false;
+            id(disp_backlight)->turn_on().set_brightness(1.0f).perform();
+            id(m5display).update();
+          }
 
 spi:
   clk_pin: GPIO36
@@ -434,7 +517,7 @@ display:
       int scan_x = visualizer::get_scanner_x(160, millis());
       it.filled_rectangle(20 + scan_x, 78, 40, 6, id(color_cyan));
 
-      it.print(30, 96, id(font_cn), id(color_dim_gray), "Faster-Whisper -> Qwen3-4B");
+      it.print(30, 96, id(font_cn), id(color_dim_gray), "SenseVoice -> Qwen3-4B");
 
     } else if (st == 3) {
       // ===== 语音播报中：展示识别原话与双行AI回答 =====
@@ -660,6 +743,20 @@ display:
       it.filled_rectangle(50, 68, 140, 8, id(color_bg));
       it.filled_rectangle(50, 68, (int)(140 * id(cardputer_vol)), 8, id(color_cyan));
     }
+    // 6. 反向主动唤醒警报 / 宏操作弹窗 HUD
+    if (millis() < id(alert_timeout_ms)) {
+      it.filled_rectangle(14, 28, 212, 76, id(color_card));
+      it.rectangle(14, 28, 212, 76, id(color_yellow));
+      it.filled_rectangle(14, 28, 212, 20, id(color_yellow));
+      it.print(22, 31, id(font_cn), id(color_bg), id(alert_title).c_str());
+      std::string al1, al2;
+      visualizer::split_cn_text(id(alert_msg), al1, al2, 32);
+      it.print(22, 54, id(font_cn), id(color_white), al1.c_str());
+      if (!al2.empty()) {
+        it.print(22, 74, id(font_cn), id(color_cyan), al2.c_str());
+      }
+    }
+
 
 voice_assistant:
   id: va_comp

@@ -236,17 +236,23 @@ def check_tcp_port(host: str, port: int, timeout: float = 0.4) -> bool:
 
 def get_real_pipeline_services() -> List[Dict[str, Any]]:
     services = [
-        {"id": "wyoming-whisper", "name": "Faster-Whisper (small-int8)", "role": "离线中文语音转写 (ASR)", "port": 10300, "match": "wyoming_faster_whisper"},
+        {"id": "wyoming-asr", "name": "SenseVoice / Whisper ASR", "role": "离线中文语音转写 (ASR)", "port": 10300, "match": "wyoming_sensevoice|wyoming_faster_whisper"},
         {"id": "wyoming-piper", "name": "Piper TTS (zh_CN-huayan)", "role": "离线中文语音合成 (TTS)", "port": 10200, "match": "wyoming_piper"},
         {"id": "homeassistant", "name": "Home Assistant Core", "role": "全屋设备总线与语音中枢", "port": 8123, "match": "homeassistant"},
     ]
     proc_mem = {}
+    proc_engine = {}
     for p in psutil.process_iter(["cmdline", "memory_info"]):
         try:
             cmd = " ".join(p.info.get("cmdline") or [])
             for s in services:
-                if s["match"] in cmd:
-                    proc_mem[s["id"]] = round(p.info["memory_info"].rss / (1024 * 1024), 1)
+                for kw in s["match"].split("|"):
+                    if kw in cmd:
+                        proc_mem[s["id"]] = round(p.info["memory_info"].rss / (1024 * 1024), 1)
+                        if kw == "wyoming_sensevoice":
+                            proc_engine[s["id"]] = "SenseVoiceSmall (INT8 · 100ms)"
+                        elif kw == "wyoming_faster_whisper":
+                            proc_engine[s["id"]] = "Faster-Whisper (small-int8)"
         except Exception:
             pass
     out = []
@@ -254,7 +260,7 @@ def get_real_pipeline_services() -> List[Dict[str, Any]]:
         alive = check_tcp_port("127.0.0.1", s["port"])
         out.append({
             "id": s["id"],
-            "name": s["name"],
+            "name": proc_engine.get(s["id"], s["name"]),
             "role": s["role"],
             "port": s["port"],
             "online": alive,
@@ -344,8 +350,25 @@ def push_ha_sensor(entity_id: str, state: Any, friendly_name: str, unit: str = N
     except Exception:
         pass
 
-# ── 后台定时推送 nuctutu 算力指标到 HA（供 Cardputer 掌上投屏） ───────────────────
+def notify_cardputer_alert(title: str, message: str):
+    """反向主动唤醒 Cardputer 屏幕并弹出警报卡片"""
+    if not HA_TOKEN:
+        return False, "HA_TOKEN not configured"
+    try:
+        headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+        resp = httpx.post(
+            f"{HA_URL}/api/services/esphome/m5cardputer_notify_alert",
+            headers=headers,
+            json={"title": title[:24], "message": message[:60]},
+            timeout=3.0,
+        )
+        return resp.status_code == 200, resp.text[:120]
+    except Exception as e:
+        return False, str(e)
+
+# ── 后台定时推送 nuctutu 算力指标到 HA（供 Cardputer 掌上投屏） + 异常主动守夜 ────
 def ha_telemetry_pusher():
+    last_alert_ts = 0.0
     while True:
         try:
             mem = psutil.virtual_memory()
@@ -357,6 +380,16 @@ def ha_telemetry_pusher():
             push_ha_sensor("sensor.ai_legion_ram", round(mem.percent, 1), "AI Legion RAM", "%")
             push_ha_sensor("sensor.ai_legion_model", MODEL_CATALOG[primary]["name"], "AI Legion Active Model")
             push_ha_sensor("sensor.ai_legion_memo", latest_memo, "AI Legion Latest Memo")
+
+            # 后台异常主动守夜（冷却 10 分钟防止刷屏）
+            now = time.time()
+            if now - last_alert_ts > 600:
+                if mem.percent > 90.0:
+                    notify_cardputer_alert("主机内存告警", f"nuctutu 内存占用已达 {mem.percent:.0f}%")
+                    last_alert_ts = now
+                elif cpu > 92.0:
+                    notify_cardputer_alert("主机算力过载", f"nuctutu CPU 持续负载 {cpu:.0f}%")
+                    last_alert_ts = now
         except Exception:
             pass
         time.sleep(15)
@@ -707,6 +740,16 @@ def api_telemetry():
 @app.get("/api/ha/devices")
 def api_ha_devices():
     return get_controllable_devices(force=True)
+
+class NotifyReq(BaseModel):
+    title: str = "集群通知"
+    message: str
+
+@app.post("/api/notify_cardputer")
+def api_notify_cardputer(req: NotifyReq):
+    ok, info = notify_cardputer_alert(req.title, req.message)
+    record_telemetry("反向主动唤醒", "Cardputer-Adv", "屏幕弹窗推送", req.title, req.message, 10.0)
+    return {"ok": ok, "detail": info}
 
 class ExecuteReq(BaseModel):
     query: str
