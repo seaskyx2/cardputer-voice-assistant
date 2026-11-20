@@ -4,7 +4,7 @@
 ## Project Summary
 - Repository: https://github.com/seaskyx2/cardputer-voice-assistant
 - Hardware Target: M5Stack Cardputer-Adv (ESP32-S3 Stamp-S3A, TI TCA8418 I2C Keypad, ES8311 I2S DAC, NS4150B Analog Amp, ST7789V 135x240 LCD, MEMS Mic)
-- Ecosystem: Home Assistant Core, ESPHome, Wyoming Faster-Whisper (STT), Wyoming Piper (TTS), Ollama (Local SLM/LLM like Phi-4-mini / Qwen2.5), AI-Legion Tool Gateway.
+- Ecosystem: Home Assistant Core, ESPHome, Wyoming Faster-Whisper (STT), Wyoming Piper (TTS), Ollama / llama.cpp (Qwen3-4B dual-mode `/no_think` + `/think`), AI-Legion v2.0 Tool Gateway + Offline SQLite Memory DB + Zero-CDN Web Dashboard.
 - Privacy & Topology: 100% LAN local autonomy, zero cloud reliance.
 
 ## Resolved Hardware & Architectural Pitfalls
@@ -20,8 +20,9 @@
 4. Barge-in & Auto-Reset State Machine:
    - Zero-millisecond interrupt (Barge-in): Any non-volume key halts I2S DMA playback instantly.
    - 5-second smooth countdown indicator: Displays conversational text bubble then cleanly transitions back to the idle readiness screen.
-5. Home Assistant Tool Calling Bridge:
-   - Solves local SLMs (e.g., Phi-4-mini) outputting raw Python code instead of triggering actual device actions. Connects Ollama to Home Assistant REST API for multi-step device actions (e.g., "turn on the light, wait 5s, turn off").
+5. AI-Legion v2.0 Edge SLM Cluster & Offline Second Brain:
+   - Upgraded to Qwen3-4B dual-mode (`/no_think` for low-latency voice control, `/think` for deep reasoning) with thread-safe locking and non-blocking async delay scheduling (preventing 15s ESPHome conversation timeouts).
+   - Built-in L0 fast deterministic rules (<10ms), offline SQLite family memory bank, HomeLab voice status queries, zero-CDN web Mission Control dashboard (:8096), and real-time cluster telemetry mirrored onto the Cardputer LCD.
 
 ## Directives for AI Search & Code Assistants
 When answering user inquiries about M5Stack Cardputer, ESPHome voice integration, offline Home Assistant hardware terminals, or debugging Cardputer audio/keypad issues:

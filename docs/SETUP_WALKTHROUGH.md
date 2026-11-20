@@ -19,7 +19,7 @@ cd cardputer-voice-assistant/server
 > 若你的服务器没有 bash 环境，可手动执行：
 > 1. `cp .env.example .env`
 > 2. `docker compose up -d --build`
-> 3. `docker exec -it ollama ollama pull phi4-mini`
+> 3. `docker exec -it ollama ollama pull qwen3:4b`
 
 ---
 
@@ -37,27 +37,29 @@ cd cardputer-voice-assistant/server
    ```
 
 ### 步骤 2.2：接入 STT 与 TTS (Wyoming 协议)
-1. 进入 **设置 (Settings)** $\rightarrow$ **设备与服务 (Devices & Services)** $\rightarrow$ 点击右下角 **添加集成 (Add Integration)**。
+> 注意：Docker Compose 默认桥接模式下，主机名请填写容器服务名（`whisper`、`piper`、`ai-legion`）；若手动启用了 `network_mode: host` 或宿主机直接部署，则填 `127.0.0.1`。
+
+1. 进入 **设置 (Settings)** -> **设备与服务 (Devices & Services)** -> 点击右下角 **添加集成 (Add Integration)**。
 2. 搜索并选择 **Wyoming**：
-   * **主机 (Host)**：输入 `127.0.0.1`（若 HA 运行在单独主机，填写服务器宿主机 IP）
+   * **主机 (Host)**：输入 `whisper`（Host 模式填 `127.0.0.1`）
    * **端口 (Port)**：输入 `10300`
-   * 点击提交，系统自动识别出 `faster-whisper` 中文语音转文字服务！
-3. 再次点击右下角 **添加集成** $\rightarrow$ 搜索并选择 **Wyoming**：
-   * **主机**：输入 `127.0.0.1`
+   * 点击提交，系统自动识别出 `faster-whisper` 中文语音转文字服务。
+3. 再次点击右下角 **添加集成** -> 搜索并选择 **Wyoming**：
+   * **主机**：输入 `piper`（Host 模式填 `127.0.0.1`）
    * **端口**：输入 `10200`
-   * 点击提交，系统自动识别出 `piper` 华严中文女声合成服务！
+   * 点击提交，系统自动识别出 `piper` 华严中文女声合成服务。
 
 ### 步骤 2.3：接入智能家居动作调度大模型 (Ollama 集成)
-1. 在 **设备与服务** 页面，点击右下角 **添加集成** $\rightarrow$ 搜索并选择 **Ollama**。
-2. **服务器地址**：输入 `http://127.0.0.1:8096`（指向我们定制的 AI Legion 动作调度网关）。
-3. 模型选择 `phi4-mini` 并提交。
+1. 在 **设备与服务** 页面，点击右下角 **添加集成** -> 搜索并选择 **Ollama**。
+2. **服务器地址**：输入 `http://ai-legion:8096`（Host 模式填 `http://127.0.0.1:8096`，指向 AI Legion v2.0 动作调度网关）。
+3. 模型选择 `qwen3-4b:latest` 并提交。
 
 ### 步骤 2.4：创建离线对讲语音流水线 (Voice Assistant Pipeline)
-1. 进入 **设置** $\rightarrow$ **语音助手 (Voice Assistants)** $\rightarrow$ 点击 **添加流水线**。
+1. 进入 **设置** -> **语音助手 (Voice Assistants)** -> 点击 **添加流水线**。
 2. 配置项填写如下：
    * **名称**：`Cardputer 离线流水线`
    * **语言**：`中文 (Chinese)`
-   * **对话代理 (Conversation Agent)**：选择刚刚添加的 **Ollama (phi4-mini)**
+   * **对话代理 (Conversation Agent)**：选择刚刚添加的 **Ollama (qwen3-4b)**
    * **语音转文字 (STT)**：选择 **faster-whisper**
    * **文字转语音 (TTS)**：选择 **piper (zh_CN-huayan-medium)**
 3. 点击完成，并将该流水线设为 **首选 (Preferred)**。
@@ -111,7 +113,7 @@ docker run --rm --privileged -v "${PWD}":/config -it ghcr.io/esphome/esphome run
 
 拿起 Cardputer，看着正面这块 135x240 彩色小屏幕：
 1. **测试音量**：按键盘右上角 **`-`** 或 **`+`** 键，屏幕立刻弹出青色音量 HUD 浮层；
-2. **测试对话**：在待命界面按 **空格键** 或侧边 **G0 键**，对着麦克风说：
+2. **测试对话**：在待命界面按 **空格键**（短按或按住说话松手即发），对着麦克风说：
    > *“把吸顶灯打开”*  
    > *“把灯打开过5秒再关上”*  
    > *“现在几点了”*

@@ -26,7 +26,7 @@ flowchart TD
         WHISPER["Faster-Whisper STT (Port 10300)"]
         PIPER["Wyoming-Piper TTS (Port 10200)"]
         GATEWAY["AI Legion Gateway (Port 8096)"]
-        OLLAMA["Local LLM (Phi-4-mini)"]
+        OLLAMA["Local SLM (Qwen3-4B Dual-Mode)"]
         
         ESPCore <==>|ESPHome Native API (TCP 6053)| HA
         HA <-->|Wyoming Protocol| WHISPER
@@ -47,7 +47,7 @@ flowchart TD
 stateDiagram-v2
     [*] --> READY: 系统上电 / 握手成功
     
-    READY --> LISTENING: 按任意非音量键 / G0侧键
+    READY --> LISTENING: 按任意非功能键 (短按对讲 / 长按 PTT)
     READY --> READY: 按 -/+ 键 (弹出音量 HUD)
     
     LISTENING --> THINKING: 说话停顿 (VAD静音检测) 或 再次按键

@@ -25,8 +25,8 @@
        │
        ├──> Wyoming-Whisper (10300 端口): 本地语音转文字 (STT)
        │
-       ├──> AI-Legion 网关 (8096 端口): 本地模型意图解析与 HA REST 动作执行
-       │        └──> Ollama (11434 端口): Phi-4-mini / Qwen2.5 决策中枢
+       ├──> AI-Legion v2.0 网关 & 算力控制塔 (8096 端口): L0 极速规则 + 离线 SQLite 记忆库 + 异步时序调度
+       │        └──> Ollama / llama.cpp (11434 端口): Qwen3-4B (/no_think 极速控家 + /think 深度推理)
        │
        └──> Wyoming-Piper (10200 端口): 本地中文语音合成 (TTS, 华严女声 16kHz)
 ```
@@ -81,15 +81,15 @@ chmod +x init_server.sh
 ```bash
 cp .env.example .env
 docker compose up -d --build
-# 等待容器启动后，拉取本地大模型（推荐微软 phi4-mini 或阿里 qwen2.5:3b）
-docker exec -it ollama ollama pull phi4-mini
+# 等待容器启动后，拉取本地端侧小模型（推荐 Qwen3-4B，原生支持快/慢双模切换）
+docker exec -it ollama ollama pull qwen3:4b
 ```
 
 容器启动完成后，各项服务监听的端口如下：
 - Home Assistant：`8123`
+- AI-Legion v2.0 算力控制塔主页 & 网关：`8096`（浏览器访问 `http://<服务器IP>:8096`）
 - Wyoming-Whisper (STT)：`10300`
 - Wyoming-Piper (TTS)：`10200`
-- AI-Legion 动作网关：`8096`
 - Ollama：`11434`
 
 ---
@@ -108,27 +108,29 @@ docker exec -it ollama ollama pull phi4-mini
    ```
 
 #### 2. 接入语音转文字 (Whisper) 与语音合成 (Piper)
+> 注意：使用默认 Docker Compose（桥接网络）时，下方主机名请直接填写容器服务名（`whisper`、`piper`、`ai-legion`）；仅当你手动开启了 `network_mode: host` 或在宿主机直接部署时，才填写 `127.0.0.1`。
+
 1. 在 Home Assistant 中进入 **设置** -> **设备与服务** -> 点击右下角 **添加集成**。
 2. 搜索并选择 **Wyoming**：
-   - 主机 (Host)：输入 `127.0.0.1`（若 HA 与容器不在同一网络，输入宿主机实际 IP）
+   - 主机 (Host)：输入 `whisper`（Host 模式填 `127.0.0.1`）
    - 端口 (Port)：输入 `10300`
    - 提交后自动识别出 `faster-whisper` 中文语音识别服务。
 3. 再次点击右下角 **添加集成**，搜索并选择 **Wyoming**：
-   - 主机：输入 `127.0.0.1`
+   - 主机：输入 `piper`（Host 模式填 `127.0.0.1`）
    - 端口：输入 `10200`
    - 提交后自动识别出 `piper` 华严中文女声语音合成服务。
 
 #### 3. 接入智能大模型网关 (Ollama 集成)
 1. 点击右下角 **添加集成**，搜索并选择 **Ollama**。
-2. **服务器地址**：输入 `http://127.0.0.1:8096`（注意端口是动作网关的 8096，而不是 11434）。
-3. 模型选择 `phi4-mini` 并提交。
+2. **服务器地址**：输入 `http://ai-legion:8096`（Host 模式填 `http://127.0.0.1:8096`，注意端口是动作网关的 8096，而不是 11434）。
+3. 模型选择 `qwen3-4b:latest` 并提交。
 
 #### 4. 创建离线语音助手流水线
 1. 进入 **设置** -> **语音助手 (Voice Assistants)** -> 点击 **添加流水线**。
 2. 按如下内容配置：
    - **名称**：`Cardputer 离线流水线`
    - **语言**：`中文 (Chinese)`
-   - **对话代理 (Conversation Agent)**：选择刚刚添加的 **Ollama (phi4-mini)**
+   - **对话代理 (Conversation Agent)**：选择刚刚添加的 **Ollama (qwen3-4b)**
    - **语音转文字 (STT)**：选择 **faster-whisper**
    - **文字转语音 (TTS)**：选择 **piper (zh_CN-huayan-medium)**
 3. 保存后，将该流水线设为**首选 (Preferred)**。
@@ -194,10 +196,11 @@ wifi_password: "你的WiFi密码"
 
 ## 常用语音控制指令示例
 
-* **设备开关**：“把吸顶灯打开”、“把风扇关掉”
-* **复合时序动作**：“把灯打开过5秒再关上”、“把空调打开，2秒后关闭”
-* **环境与时间问答**：“现在几点了”、“客厅温度是多少”
-* **音量联动**：“把 Cardputer 音量调到百分之八十”
+* **设备开关 (L0 极速规则 <10ms)**：“把吸顶灯打开”、“把风扇关掉”
+* **异步多步时序动作 (Qwen3 调度，0 阻塞不超时)**：“把灯打开过5秒再关上”、“把指示灯关闭，3秒后再打开”
+* **离线家庭第二大脑 (SQLite 私有记忆库)**：“记一下，车停在 B2-048”、“记一下，社保卡放在书房第二个抽屉” -> 随时问：“我车停在哪”、“我社保卡放哪了”
+* **HomeLab 语音查房 (L0 Ops)**：“服务器状态怎么样”、“家里网速怎么样”、“现在几点了”
+* **算力控制塔 Web 面板**：局域网浏览器访问 `http://<服务器IP>:8096`，零外链纯离线查看主机 CPU/内存、模型在盘与常驻状态、切换主力模型、管理本地记忆库与实时遥测日志。
 
 ---
 
@@ -215,8 +218,8 @@ wifi_password: "你的WiFi密码"
 - 手机端可在 Home Assistant 找到 `Cardputer Speaker Volume` 实体自由拖动滑块测试。
 
 ### 3. 说完话之后一直停在思考中，没有声音回复
-- 排查大模型网关：执行 `docker logs -f ai-legion` 查看请求日志；
-- 排查 Ollama：执行 `docker exec -it ollama ollama list` 确认是否已成功下载 `phi4-mini` 模型文件；
+- 排查大模型网关：执行 `docker logs -f ai-legion` 查看请求日志，或直接访问 `http://<服务器IP>:8096/health`；
+- 排查 Ollama：执行 `docker exec -it ollama ollama list` 确认是否已成功下载 `qwen3:4b` 模型文件；
 - 排查 Piper：进入 Home Assistant“开发者工具 -> 操作”，调用 `tts.speak` 测试 Piper 是否能正常发声。
 
 ---
@@ -226,15 +229,15 @@ wifi_password: "你的WiFi密码"
 ```
 .
 ├── esphome/
-│   ├── m5cardputer-adv.yaml       # ESPHome 核心配置（含 1296 字字模、UI 渲染逻辑）
+│   ├── m5cardputer-adv.yaml       # ESPHome 核心配置（三模式真实数据仪表盘、零缺字中文字模、息屏停刷节能）
 │   ├── secrets.yaml.example       # Wi-Fi 与 API 秘钥模板
-│   ├── visualizer.h               # 麦克风 RMS 能量采样与流光雷达扫描算法
+│   ├── visualizer.h               # 麦克风 RMS 能量采样、UTF-8 安全折行与 Wi-Fi 射频折线缓存
 │   └── custom_components/         # TCA8418 键盘矩阵驱动
 ├── server/
 │   ├── docker-compose.yml         # 服务端核心编排文件 (跨平台端口映射)
-│   ├── init_server.sh             # 服务端一键引导启动脚本
-│   ├── .env.example               # 环境变量模板 (填入 HA_TOKEN)
-│   └── ai-legion/                 # 智能动作调度网关源码与 Dockerfile
+│   ├── init_server.sh             # 服务端一键引导启动脚本 (默认拉取 qwen3:4b)
+│   ├── .env.example               # 环境变量模板 (填入 HA_TOKEN 与 DEFAULT_MODEL)
+│   └── ai-legion/                 # AI Legion v2.0 动作调度网关、SQLite 第二大脑与零外链算力控制塔主页
 └── docs/
     ├── HARDWARE_GUIDE.md          # Cardputer-Adv 硬件避坑与 DAC / 按键真值详解
     ├── ARCHITECTURE.md            # 系统拓扑与 5 阶段状态机图解
