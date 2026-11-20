@@ -86,5 +86,7 @@ services:
       - HA_URL=http://homeassistant:8123
       - HA_TOKEN=${HA_TOKEN}
       - OLLAMA_URL=http://ollama:11434
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-phi4-mini}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-qwen3:4b}
       - PORT=8096
+    volumes:
+      - ./ai-legion-data:/app/data

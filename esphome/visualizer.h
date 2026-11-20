@@ -11,15 +11,13 @@ static const int NUM_BARS = 18;
 static float bar_heights[NUM_BARS] = {0.0f};
 static float current_energy = 0.0f;
 static uint32_t think_start_ms = 0;
-static std::string last_stt_text = "";
-static std::string last_tts_text = "";
 
-// ===== Wi-Fi 射频历史采样缓存 (用于绘制雷达波动折线图 Sparkline) =====
-static const int RSSI_HISTORY_LEN = 18;
-static float rssi_history[RSSI_HISTORY_LEN] = { -60.0f, -60.0f, -60.0f, -60.0f, -60.0f,
-                                                -60.0f, -60.0f, -60.0f, -60.0f, -60.0f,
-                                                -60.0f, -60.0f, -60.0f, -60.0f, -60.0f,
-                                                -60.0f, -60.0f, -60.0f };
+// ===== Wi-Fi 射频历史采样缓存 (用于绘制真实雷达波动折线图 Sparkline) =====
+static const int RSSI_HISTORY_LEN = 16;
+static float rssi_history[RSSI_HISTORY_LEN] = { -60.0f, -60.0f, -60.0f, -60.0f,
+                                                -60.0f, -60.0f, -60.0f, -60.0f,
+                                                -60.0f, -60.0f, -60.0f, -60.0f,
+                                                -60.0f, -60.0f, -60.0f, -60.0f };
 static uint32_t last_rssi_sample_ms = 0;
 
 inline void record_rssi(float rssi, uint32_t now) {
@@ -32,31 +30,6 @@ inline void record_rssi(float rssi, uint32_t now) {
     rssi_history[RSSI_HISTORY_LEN - 1] = rssi;
   }
 }
-
-// ===== 物理电子水平仪微球 (带弹性阻尼与微幅物理受扰) =====
-struct PhysBall {
-  float x = 0.0f; // -1.0 ~ 1.0 相对中心偏移
-  float y = 0.0f;
-  float vx = 0.0f;
-  float vy = 0.0f;
-
-  void update(uint32_t ms) {
-    // 物理微动模型：微幅自然悬浮受扰 + 弹性阻尼收敛
-    float target_x = std::sin(ms / 650.0f) * 0.28f + std::sin(ms / 190.0f) * 0.08f;
-    float target_y = std::cos(ms / 850.0f) * 0.24f + std::cos(ms / 230.0f) * 0.06f;
-    float ax = (target_x - x) * 0.15f;
-    float ay = (target_y - y) * 0.15f;
-    vx = (vx + ax) * 0.85f;
-    vy = (vy + ay) * 0.85f;
-    x += vx;
-    y += vy;
-    if (x > 0.95f) { x = 0.95f; vx = -vx * 0.4f; }
-    if (x < -0.95f) { x = -0.95f; vx = -vx * 0.4f; }
-    if (y > 0.95f) { y = 0.95f; vy = -vy * 0.4f; }
-    if (y < -0.95f) { y = -0.95f; vy = -vy * 0.4f; }
-  }
-};
-static PhysBall g_ball;
 
 // 麦克风原始 PCM 采样计算 RMS 均方根音量 (每秒被 I2S 回调触发多次)
 inline void on_mic_data(const std::vector<uint8_t> &data) {
@@ -79,7 +52,6 @@ inline void on_mic_data(const std::vector<uint8_t> &data) {
   if (sampled == 0) return;
   float rms = std::sqrt((float)sum_sq / sampled);
 
-  // 灵敏度动态归一化 (0.0 ~ 1.0)
   float energy = (rms - 180.0f) / 5500.0f;
   if (energy < 0.0f) energy = 0.0f;
   if (energy > 1.0f) energy = 1.0f;
@@ -98,17 +70,15 @@ inline void update_bars(bool is_listening) {
     return;
   }
 
-  // 模拟从中央向两侧扩散的立体动感频谱
   int half = NUM_BARS / 2;
   for (int i = 0; i < half; i++) {
-    float dist = (float)(i + 1) / half; // 边缘到中心
+    float dist = (float)(i + 1) / half;
     float factor = 0.35f + 0.65f * dist;
     float jitter = ((rand() % 30) - 15) / 100.0f;
     float target = current_energy * 30.0f * (factor + jitter);
     if (target < 2.0f && current_energy > 0.04f) target = 2.0f;
     if (target > 30.0f) target = 30.0f;
 
-    // 平滑上升与衰减
     bar_heights[i] = bar_heights[i] * 0.45f + target * 0.55f;
     bar_heights[NUM_BARS - 1 - i] = bar_heights[i];
   }
@@ -117,7 +87,7 @@ inline void update_bars(bool is_listening) {
 // 思考态光效位置计算 (在 width 像素范围内平滑来回穿梭)
 inline int get_scanner_x(int width, uint32_t ms) {
   if (width <= 0) return 0;
-  int period = 1200; // 1.2秒往返一次
+  int period = 1200;
   int phase = ms % period;
   if (phase > period / 2) {
     phase = period - phase;
@@ -126,7 +96,7 @@ inline int get_scanner_x(int width, uint32_t ms) {
 }
 
 // 严谨的 UTF-8 中文双行平滑拆分算法 (防止汉字字节腰斩乱码)
-inline void split_cn_text(const std::string &in, std::string &l1, std::string &l2, size_t max_bytes = 42) {
+inline void split_cn_text(const std::string &in, std::string &l1, std::string &l2, size_t max_bytes = 36) {
   if (in.size() <= max_bytes) {
     l1 = in;
     l2 = "";

@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Legion v2.0 · nuctutu 端侧算力控制塔</title>
+  <style>
+    :root {
+      --bg: #070b14;
+      --surface: #0f172a;
+      --surface-2: #162033;
+      --border: #23314d;
+      --text: #e2e8f0;
+      --muted: #8b9bb4;
+      --cyan: #06b6d4;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --indigo: #6366f1;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 20px;
+    }
+    .header-inner {
+      max-width: 1320px;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .logo {
+      width: 38px; height: 38px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--indigo), var(--cyan));
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 16px; color: #fff;
+    }
+    .brand h1 { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .brand p { font-size: 12px; color: var(--muted); }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; border: 1px solid transparent;
+    }
+    .badge-green { background: rgba(16,185,129,.12); color: var(--green); border-color: rgba(16,185,129,.3); }
+    .badge-cyan { background: rgba(6,182,212,.12); color: var(--cyan); border-color: rgba(6,182,212,.3); }
+    .badge-yellow { background: rgba(245,158,11,.12); color: var(--yellow); border-color: rgba(245,158,11,.3); }
+    .badge-gray { background: rgba(139,155,180,.12); color: var(--muted); border-color: rgba(139,155,180,.25); }
+    .badge-red { background: rgba(239,68,68,.12); color: var(--red); border-color: rgba(239,68,68,.3); }
+
+    .metrics { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; }
+    .metric-pill {
+      background: var(--surface-2); border: 1px solid var(--border);
+      padding: 6px 12px; border-radius: 8px; display: flex; align-items: center; gap: 6px;
+    }
+    .metric-pill span.k { color: var(--muted); }
+    .metric-pill span.v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+
+    main {
+      max-width: 1320px;
+      margin: 20px auto;
+      padding: 0 20px 40px;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+    .grid-2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; }
+    .grid-equal { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @media (max-width: 960px) {
+      .grid-2, .grid-equal { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(35,49,77,.6);
+    }
+    .card-title { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+
+    .model-list, .service-list, .mem-list, .dev-list, .log-list {
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .item-box {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .item-top {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    }
+    .item-name { font-size: 13px; font-weight: 700; color: #f8fafc; }
+    .item-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .item-meta {
+      display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px;
+      font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace;
+    }
+    .btn {
+      cursor: pointer; border: 1px solid var(--border); background: var(--surface);
+      color: var(--text); padding: 5px 10px; border-radius: 7px; font-size: 12px; font-weight: 600;
+      transition: all .15s;
+    }
+    .btn:hover { border-color: var(--cyan); color: #fff; }
+    .btn-primary { background: var(--indigo); border-color: var(--indigo); color: #fff; }
+    .btn-primary:hover { background: #4f46e5; }
+    .btn-danger { border-color: rgba(239,68,68,.4); color: var(--red); }
+    .btn-danger:hover { background: rgba(239,68,68,.15); }
+
+    .console-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    input[type="text"], select {
+      background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+      padding: 9px 12px; border-radius: 8px; font-size: 13px; outline: none;
+    }
+    input[type="text"]:focus { border-color: var(--cyan); }
+    .flex-1 { flex: 1; min-width: 220px; }
+    .quick-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .quick-pill {
+      font-size: 11px; padding: 4px 10px; border-radius: 999px;
+      background: rgba(6,182,212,.08); border: 1px solid rgba(6,182,212,.25);
+      color: var(--cyan); cursor: pointer;
+    }
+    .quick-pill:hover { background: rgba(6,182,212,.18); }
+    .console-out {
+      margin-top: 12px; background: #060911; border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px; font-size: 13px; white-space: pre-wrap;
+      min-height: 70px; max-height: 240px; overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .scroll-box { max-height: 290px; overflow-y: auto; padding-right: 4px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot-green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .dot-gray { background: var(--muted); }
+    .dot-red { background: var(--red); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <div class="logo">AI</div>
+        <div>
+          <h1>
+            AI Legion v2.0 算力控制塔
+            <span class="badge badge-green">100% 离线实测数据</span>
+          </h1>
+          <p id="host-desc">nuctutu 边缘主机 · 端侧小模型集群 + 家庭第二大脑 + Home Assistant 总线</p>
+        </div>
+      </div>
+      <div class="metrics">
+        <div class="metric-pill"><span class="k">CPU</span><span class="v" style="color:var(--cyan)" id="m-cpu">--%</span></div>
+        <div class="metric-pill"><span class="k">内存</span><span class="v" style="color:var(--green)" id="m-ram">-- / -- GB</span></div>
+        <div class="metric-pill"><span class="k">可用</span><span class="v" style="color:#a7f3d0" id="m-free">-- GB</span></div>
+        <div class="metric-pill"><span class="k">路由器</span><span class="v" style="color:var(--yellow)" id="m-net">↓-- ↑-- KB/s</span></div>
+        <div class="metric-pill"><span class="k">运行</span><span class="v" id="m-up">--h</span></div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- 第一行：真实模型集群 + 语音流水线探活 -->
+    <div class="grid-2">
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">端侧 GGUF 小模型集群（真实磁盘与内存状态）</div>
+          <span class="badge badge-cyan" id="primary-badge">主力: --</span>
+        </div>
+        <div class="model-list" id="model-list">
+          <div class="item-box">正在探测本地模型权重...</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">本地语音与家居服务总线（实时端口探活）</div>
+          <span class="badge badge-green">TCP 实时检测</span>
+        </div>
+        <div class="service-list" id="service-list">
+          <div class="item-box">正在探测本地服务端口...</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 第二行：实战调度控制台 -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">集群实战测试台（支持 L0 规则 / 第二大脑 / Qwen3 快慢双模）</div>
+        <label style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer; color:var(--yellow);">
+          <input type="checkbox" id="think-toggle"> 开启深度思考 (/think)
+        </label>
+      </div>
+      <div class="console-row">
+        <input type="text" id="cmd-input" class="flex-1" placeholder="输入语音指令测试，如：记一下车停在B2-048 / 服务器状态怎么样 / 打开指示灯..." onkeydown="if(event.key==='Enter') runCmd()">
+        <button class="btn btn-primary" onclick="runCmd()" id="run-btn">执行调度</button>
+      </div>
+      <div class="quick-pills">
+        <span class="quick-pill" onclick="fillAndRun('现在几点了')">现在几点了 (L0)</span>
+        <span class="quick-pill" onclick="fillAndRun('服务器状态怎么样')">服务器状态怎么样 (L0 Ops)</span>
+        <span class="quick-pill" onclick="fillAndRun('记一下，社保卡放在书房第二个抽屉')">写入记忆：社保卡位置 (L1)</span>
+        <span class="quick-pill" onclick="fillAndRun('我社保卡放哪了')">召回记忆：社保卡在哪 (L1 RAG)</span>
+        <span class="quick-pill" onclick="fillAndRun('把小米指示灯关闭，过3秒再打开')">异步时序控家 (L2 Qwen3)</span>
+      </div>
+      <div class="console-out" id="console-out">等待指令输入...</div>
+    </section>
+
+    <!-- 第三行：离线第二大脑记忆库 + HA 物理设备 -->
+    <div class="grid-equal">
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">离线家庭第二大脑（SQLite 私有记忆库）</div>
+          <span class="badge badge-cyan" id="mem-count">0 条</span>
+        </div>
+        <div class="console-row" style="margin-bottom:12px;">
+          <select id="mem-cat">
+            <option value="随手记">随手记</option>
+            <option value="物品位置">物品位置</option>
+            <option value="待办提醒">待办提醒</option>
+          </select>
+          <input type="text" id="mem-input" class="flex-1" placeholder="新增一条本地隐私记忆..." onkeydown="if(event.key==='Enter') addMem()">
+          <button class="btn btn-primary" onclick="addMem()">存入</button>
+        </div>
+        <div class="mem-list scroll-box" id="mem-list"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">Home Assistant 真实可控设备</div>
+          <button class="btn" onclick="loadDevices()">刷新状态</button>
+        </div>
+        <div class="dev-list scroll-box" id="dev-list"></div>
+      </section>
+    </div>
+
+    <!-- 第四行：实时遥测流水 -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">全链路实时遥测日志（Cardputer / 小爱音箱 / 控制塔）</div>
+        <span class="badge badge-gray" id="log-count">0 条记录</span>
+      </div>
+      <div class="log-list scroll-box" id="log-list"></div>
+    </section>
+  </main>
+
+  <script>
+    async function fetchJSON(url, opts) {
+      const r = await fetch(url, opts);
+      return await r.json();
+    }
+
+    async function loadSystem() {
+      try {
+        const d = await fetchJSON('/api/system');
+        document.getElementById('m-cpu').textContent = d.cpu_percent + '%';
+        document.getElementById('m-ram').textContent = `${d.used_ram_gb} / ${d.total_ram_gb} GB (${d.ram_percent}%)`;
+        document.getElementById('m-free').textContent = d.free_ram_gb + ' GB';
+        document.getElementById('m-net').textContent = `↓${d.router_down_kb} ↑${d.router_up_kb} KB/s`;
+        document.getElementById('m-up').textContent = d.uptime_hours + 'h';
+        document.getElementById('primary-badge').textContent = '主力: ' + d.primary_model;
+
+        const sl = document.getElementById('service-list');
+        sl.innerHTML = d.services.map(s => `
+          <div class="item-box">
+            <div class="item-top">
+              <div class="item-name"><span class="dot ${s.online ? 'dot-green' : 'dot-red'}" style="margin-right:6px;"></span>${s.name}</div>
+              <span class="badge ${s.online ? 'badge-green' : 'badge-red'}">${s.online ? 'ONLINE :' + s.port : 'OFFLINE'}</span>
+            </div>
+            <div class="item-sub">${s.role}</div>
+            <div class="item-meta"><span>进程内存: ${s.ram_mb > 0 ? s.ram_mb + ' MB' : '独立容器/外部'}</span></div>
+          </div>
+        `).join('');
+      } catch (e) {}
+    }
+
+    async function loadModels() {
+      try {
+        const list = await fetchJSON('/api/models');
+        const el = document.getElementById('model-list');
+        el.innerHTML = list.map(m => {
+          const stateBadge = m.loaded
+            ? `<span class="badge badge-green">已常驻内存 (${m.state})</span>`
+            : (m.on_disk ? `<span class="badge badge-gray">在盘待命 (${m.size_gb}GB)</span>` : `<span class="badge badge-red">未下载</span>`);
+          const primaryTag = m.is_primary ? `<span class="badge badge-cyan">当前主力</span>` : '';
+          const actions = m.on_disk ? `
+            <div style="display:flex; gap:6px; margin-top:8px;">
+              ${!m.is_primary ? `<button class="btn btn-primary" onclick="selectModel('${m.id}')">设为主力大脑</button>` : ''}
+              ${m.loaded ? `<button class="btn btn-danger" onclick="unloadModel('${m.id}')">卸载释放内存</button>` : ''}
+            </div>` : '';
+          return `
+            <div class="item-box" style="${m.is_primary ? 'border-color: rgba(6,182,212,.5);' : ''}">
+              <div class="item-top">
+                <div class="item-name">${m.name}</div>
+                <div style="display:flex; gap:6px;">${primaryTag}${stateBadge}</div>
+              </div>
+              <div class="item-sub">${m.role}</div>
+              <div class="item-meta">
+                <span>规格: ${m.params}</span>
+                <span>调用: ${m.call_count} 次</span>
+                <span>上次耗时: ${m.last_latency_ms ? m.last_latency_ms + 'ms' : '-'}</span>
+              </div>
+              ${actions}
+            </div>
+          `;
+        }).join('');
+      } catch (e) {}
+    }
+
+    async function selectModel(id) {
+      await fetch(`/api/models/${id}/select`, { method: 'POST' });
+      loadModels(); loadSystem();
+    }
+
+    async function unloadModel(id) {
+      await fetch(`/api/models/${id}/unload`, { method: 'POST' });
+      loadModels(); loadSystem();
+    }
+
+    async function loadMemories() {
+      try {
+        const list = await fetchJSON('/api/memories');
+        document.getElementById('mem-count').textContent = list.length + ' 条';
+        const el = document.getElementById('mem-list');
+        if (!list.length) {
+          el.innerHTML = '<div class="item-box" style="color:var(--muted); font-size:12px;">暂无本地记忆，对着 Cardputer 说“记一下，xxx”或上方直接录入。</div>';
+          return;
+        }
+        el.innerHTML = list.map(m => `
+          <div class="item-box">
+            <div class="item-top">
+              <div><span class="badge badge-cyan" style="margin-right:6px;">${m.category}</span><span style="font-size:13px;">${m.content}</span></div>
+              <button class="btn btn-danger" style="padding:2px 8px; font-size:11px;" onclick="delMem(${m.id})">删除</button>
+            </div>
+            <div class="item-meta"><span>记录时间: ${m.created_at}</span></div>
+          </div>
+        `).join('');
+      } catch (e) {}
+    }
+
+    async function addMem() {
+      const inp = document.getElementById('mem-input');
+      const cat = document.getElementById('mem-cat').value;
+      if (!inp.value.trim()) return;
+      await fetch('/api/memories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: inp.value.trim(), category: cat })
+      });
+      inp.value = '';
+      loadMemories();
+    }
+
+    async function delMem(id) {
+      await fetch(`/api/memories/${id}`, { method: 'DELETE' });
+      loadMemories();
+    }
+
+    async function loadDevices() {
+      try {
+        const list = await fetchJSON('/api/ha/devices');
+        const el = document.getElementById('dev-list');
+        if (!list.length) {
+          el.innerHTML = '<div class="item-box" style="color:var(--muted); font-size:12px;">未拉取到 HA 设备（请检查 HA_TOKEN）</div>';
+          return;
+        }
+        el.innerHTML = list.map(d => {
+          const isOn = d.state === 'on';
+          const isUnavail = d.state === 'unavailable';
+          const bClass = isOn ? 'badge-green' : (isUnavail ? 'badge-gray' : 'badge-yellow');
+          return `
+            <div class="item-box">
+              <div class="item-top">
+                <div class="item-name">${d.name}</div>
+                <span class="badge ${bClass}">${d.state.toUpperCase()}</span>
+              </div>
+              <div class="item-meta"><span>${d.id}</span></div>
+            </div>
+          `;
+        }).join('');
+      } catch (e) {}
+    }
+
+    async function loadTelemetry() {
+      try {
+        const list = await fetchJSON('/api/telemetry');
+        document.getElementById('log-count').textContent = list.length + ' 条记录';
+        const el = document.getElementById('log-list');
+        if (!list.length) {
+          el.innerHTML = '<div class="item-box" style="color:var(--muted); font-size:12px;">暂无调度记录</div>';
+          return;
+        }
+        el.innerHTML = list.map(l => `
+          <div class="item-box">
+            <div class="item-top">
+              <div><span class="badge badge-cyan">${l.source}</span> <span class="badge badge-gray">${l.model_name}</span> <strong style="font-size:12px; margin-left:4px;">${l.task_name}</strong></div>
+              <span style="font-size:11px; color:var(--muted); font-family:monospace;">${l.timestamp} · ${l.latency_ms}ms</span>
+            </div>
+            <div class="item-sub">问: ${l.input_preview}</div>
+            <div class="item-sub" style="color:#a7f3d0;">答: ${l.output_preview}</div>
+          </div>
+        `).join('');
+      } catch (e) {}
+    }
+
+    function fillAndRun(text) {
+      document.getElementById('cmd-input').value = text;
+      runCmd();
+    }
+
+    async function runCmd() {
+      const inp = document.getElementById('cmd-input');
+      const out = document.getElementById('console-out');
+      const btn = document.getElementById('run-btn');
+      const think = document.getElementById('think-toggle').checked;
+      if (!inp.value.trim()) return;
+      btn.disabled = true;
+      btn.textContent = '推理中...';
+      out.textContent = '正在调度本地端侧模型，请稍候...';
+      try {
+        const res = await fetchJSON('/api/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: inp.value.trim(), think })
+        });
+        out.textContent = `[节点: ${res.model_id} | 耗时: ${Math.round(res.latency_ms || 0)}ms]\n\n${res.result || res.voice_summary}`;
+        loadTelemetry(); loadMemories(); loadModels();
+      } catch (e) {
+        out.textContent = '请求失败: ' + e;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '执行调度';
+      }
+    }
+
+    loadSystem(); loadModels(); loadMemories(); loadDevices(); loadTelemetry();
+    setInterval(() => { loadSystem(); loadModels(); loadTelemetry(); }, 4000);
+  </script>
+</body>
+</html>
