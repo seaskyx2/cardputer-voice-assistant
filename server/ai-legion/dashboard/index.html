@@ -346,7 +346,7 @@
         el.innerHTML = list.map(m => `
           <div class="item-box">
             <div class="item-top">
-              <div><span class="badge badge-cyan" style="margin-right:6px;">${m.category}</span><span style="font-size:13px;">${m.content}</span></div>
+              <div><span class="badge badge-cyan" style="margin-right:6px;">${m.category}</span>${m.event_date ? `<span class="badge badge-yellow" style="margin-right:6px;">📅 ${m.event_date}</span>` : ''}<span style="font-size:13px;">${m.content}</span></div>
               <button class="btn btn-danger" style="padding:2px 8px; font-size:11px;" onclick="delMem(${m.id})">删除</button>
             </div>
             <div class="item-meta"><span>记录时间: ${m.created_at}</span></div>

@@ -8,7 +8,7 @@ import asyncio
 import threading
 import psutil
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -47,6 +47,57 @@ DB_PATH = os.path.join(DATA_DIR, "memory.db")
 app = FastAPI(title="AI Legion v2.0 · 端侧小模型集群控制塔")
 
 # ── SQLite 离线家庭第二大脑（记忆与待办） ────────────────────────────────────────
+CN_WEEKDAY_MAP = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+CN_WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+def resolve_relative_date(text: str, base_dt: datetime = None) -> Optional[str]:
+    """将口语相对日期（今天/明天/这个星期天/下周三/X月X日）锚定为绝对 YYYY-MM-DD"""
+    now = base_dt or datetime.now()
+    today = now.date()
+    # 1. 绝对月日：X月X日/号
+    m_md = re.search(r"(\d{1,2})月(\d{1,2})[日号]?", text)
+    if m_md:
+        mo, dy = int(m_md.group(1)), int(m_md.group(2))
+        try:
+            cand = date(today.year, mo, dy)
+            if cand < today - timedelta(days=30):
+                cand = date(today.year + 1, mo, dy)
+            return cand.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    # 2. 今天 / 明天 / 后天 / 大后天
+    if "大后天" in text:
+        return (today + timedelta(days=3)).strftime("%Y-%m-%d")
+    if "后天" in text:
+        return (today + timedelta(days=2)).strftime("%Y-%m-%d")
+    if "明天" in text or "明日" in text:
+        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    if "今天" in text or "今晚" in text or "今日" in text:
+        return today.strftime("%Y-%m-%d")
+    # 3. 本周/这周/这个星期 + X  或  下周/下个星期 + X
+    m_wk = re.search(r"(这周|本周|这个星期|这星期|下周|下个星期|下星期)?(?:星期|周|礼拜)([一二三四五六日天])", text)
+    if m_wk:
+        prefix = m_wk.group(1) or ""
+        target_wd = CN_WEEKDAY_MAP[m_wk.group(2)]
+        monday = today - timedelta(days=today.weekday())
+        if "下" in prefix:
+            target = monday + timedelta(days=7 + target_wd)
+        elif any(p in prefix for p in ("这", "本")):
+            target = monday + timedelta(days=target_wd)
+        else:
+            # 无前缀（如只说“周日”），取今天起最近的那个周X
+            diff = (target_wd - today.weekday()) % 7
+            target = today + timedelta(days=diff)
+        return target.strftime("%Y-%m-%d")
+    # 4. 泛指“这周 / 本周 / 下周”（未指定周几，锚定到该周周日作为截止参考）
+    if any(w in text for w in ("下周", "下星期", "下个星期")):
+        monday = today - timedelta(days=today.weekday())
+        return (monday + timedelta(days=13)).strftime("%Y-%m-%d")
+    if any(w in text for w in ("这周", "本周", "这星期", "这个星期")):
+        monday = today - timedelta(days=today.weekday())
+        return (monday + timedelta(days=6)).strftime("%Y-%m-%d")
+    return None
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
@@ -54,32 +105,50 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT NOT NULL DEFAULT '随手记',
             content TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            event_date TEXT DEFAULT NULL
         )
     """)
+    # 兼容旧库自动迁移增加 event_date 列，并回溯补全历史记录的绝对日期
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(memories)").fetchall()]
+    if "event_date" not in cols:
+        conn.execute("ALTER TABLE memories ADD COLUMN event_date TEXT DEFAULT NULL")
+    rows = conn.execute("SELECT id, content, created_at, event_date FROM memories WHERE event_date IS NULL").fetchall()
+    for mid, content, created_at, _ in rows:
+        try:
+            base = datetime.strptime(created_at[:16], "%Y-%m-%d %H:%M")
+        except Exception:
+            base = datetime.now()
+        ev = resolve_relative_date(content, base)
+        if ev:
+            conn.execute("UPDATE memories SET event_date = ?, category = '待办提醒' WHERE id = ?", (ev, mid))
     conn.commit()
     conn.close()
 
 init_db()
 
-def add_memory(content: str, category: str = "随手记") -> Dict[str, Any]:
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+def add_memory(content: str, category: str = "随手记", event_date: str = None) -> Dict[str, Any]:
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    ev = event_date or resolve_relative_date(content, now)
+    if ev and category == "随手记":
+        category = "待办提醒"
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO memories (category, content, created_at) VALUES (?, ?, ?)",
-        (category, content.strip(), now_str),
+        "INSERT INTO memories (category, content, created_at, event_date) VALUES (?, ?, ?, ?)",
+        (category, content.strip(), now_str, ev),
     )
     mid = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"id": mid, "category": category, "content": content.strip(), "created_at": now_str}
+    return {"id": mid, "category": category, "content": content.strip(), "created_at": now_str, "event_date": ev}
 
 def list_memories(limit: int = 30) -> List[Dict[str, Any]]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT ?",
+        "SELECT id, category, content, created_at, event_date FROM memories ORDER BY id DESC LIMIT ?",
         (limit,),
     ).fetchall()
     conn.close()
@@ -93,11 +162,69 @@ def delete_memory(mid: int) -> bool:
     conn.close()
     return deleted
 
-def search_memories(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+def format_memory_for_llm(m: Dict[str, Any], today: date) -> str:
+    ev = m.get("event_date")
+    if ev:
+        try:
+            ev_d = datetime.strptime(ev, "%Y-%m-%d").date()
+            delta = (ev_d - today).days
+            wd = CN_WEEKDAY_NAMES[ev_d.weekday()]
+            if delta < 0:
+                status = f"已过期{-delta}天"
+            elif delta == 0:
+                status = "就是今天"
+            elif delta == 1:
+                status = "明天"
+            else:
+                status = f"还有{delta}天"
+            return f"- [绝对日期: {ev} {wd} ({status}) | 分类: {m['category']} | 记录于: {m['created_at']}] {m['content']}"
+        except Exception:
+            pass
+    return f"- [无指定日期 | 分类: {m['category']} | 记录于: {m['created_at']}] {m['content']}"
+
+def search_memories(query: str, top_k: int = 6) -> Dict[str, Any]:
+    """支持时间窗口精确过滤（今天/明天/这周/下周/最近）+ 关键词打分召回"""
     all_mems = list_memories(100)
-    if not all_mems:
-        return []
-    # 提取中文词块与数字/英文关键词做轻量打分召回
+    today = datetime.now().date()
+    monday = today - timedelta(days=today.weekday())
+    sunday = monday + timedelta(days=6)
+
+    # 判断用户是否在问特定时间窗口的日程
+    window_label = None
+    win_start, win_end = None, None
+    if any(w in query for w in ("今天", "今日", "今晚")):
+        window_label = f"今天({today.strftime('%Y-%m-%d')})"
+        win_start, win_end = today, today
+    elif any(w in query for w in ("明天", "明日")):
+        tmr = today + timedelta(days=1)
+        window_label = f"明天({tmr.strftime('%Y-%m-%d')})"
+        win_start, win_end = tmr, tmr
+    elif any(w in query for w in ("这周", "本周", "这星期", "这个星期")):
+        window_label = f"本周({monday.strftime('%m-%d')}至{sunday.strftime('%m-%d')})"
+        win_start, win_end = monday, sunday
+    elif any(w in query for w in ("下周", "下星期", "下个星期")):
+        nm = monday + timedelta(days=7)
+        ns = nm + timedelta(days=6)
+        window_label = f"下周({nm.strftime('%m-%d')}至{ns.strftime('%m-%d')})"
+        win_start, win_end = nm, ns
+    elif any(w in query for w in ("最近", "近期", "接下来", "待办", "日程", "安排", "要做的事", "什么事")):
+        window_label = f"近期({today.strftime('%m-%d')}起14天内)"
+        win_start, win_end = today, today + timedelta(days=14)
+
+    if win_start and win_end:
+        in_window = []
+        for m in all_mems:
+            ev = m.get("event_date")
+            if ev:
+                try:
+                    ev_d = datetime.strptime(ev, "%Y-%m-%d").date()
+                    if win_start <= ev_d <= win_end:
+                        in_window.append(m)
+                except Exception:
+                    pass
+        return {"mode": "time_window", "window_label": window_label, "items": in_window[:top_k]}
+
+    # 否则按关键词检索（排除过期日程干扰，保留所有物品位置/随手记）
     clean_q = re.sub(r"[我的你在哪了呢吗呀啊？?！!，,。.请问帮查一下之前记过备忘]", "", query)
     tokens = [t for t in re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]{1,2}", clean_q) if t]
     scored = []
@@ -112,9 +239,8 @@ def search_memories(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         if score > 0:
             scored.append((score, m))
     scored.sort(key=lambda x: (-x[0], -x[1]["id"]))
-    if scored:
-        return [x[1] for x in scored[:top_k]]
-    return all_mems[:min(3, len(all_mems))]
+    items = [x[1] for x in scored[:top_k]] if scored else all_mems[:min(4, len(all_mems))]
+    return {"mode": "keyword", "window_label": None, "items": items}
 
 # ── 真实模型注册表（只扫描磁盘真实存在的 GGUF） ─────────────────────────────────
 MODEL_CATALOG = {
@@ -517,37 +643,56 @@ def handle_voice_query_sync(query: str, source: str = "Voice", preferred_model: 
         record_telemetry(source, "L0-Ops", "HomeLab 语音查房", q, reply, lat)
         return {"voice_summary": reply, "result": reply, "model_id": "L0-Ops", "latency_ms": lat}
 
-    # ===== L1-A：离线“家庭第二大脑”写入（记一下/备忘/提醒） =====
+    # ===== L1-A：离线“家庭第二大脑”写入（自动将相对日期锚定为绝对日期） =====
     mem_add_match = re.match(r"^(?:请)?(?:帮我)?(?:记一下|记住|备忘|记录一下|提醒我)[：:，,\s]*(.+)$", q)
     if mem_add_match:
         content = mem_add_match.group(1).strip()
-        cat = "物品位置" if any(w in content for w in ("放在", "停在", "抽屉", "柜子", "车位")) else (
-              "待办提醒" if any(w in content for w in ("明天", "下午", "点", "记得", "买", "寄")) else "随手记")
+        cat = "物品位置" if any(w in content for w in ("放在", "停在", "抽屉", "柜子", "车位")) else "随手记"
         item = add_memory(content, category=cat)
-        reply = f"好的，已记入本地{cat}：{content}。"
+        if item.get("event_date"):
+            ev_d = datetime.strptime(item["event_date"], "%Y-%m-%d").date()
+            wd = CN_WEEKDAY_NAMES[ev_d.weekday()]
+            reply = f"好的，已记入{ev_d.month}月{ev_d.day}日{wd}待办：{content}"
+        else:
+            reply = f"好的，已记入本地{item['category']}：{content}"
         lat = (time.time() - start_t) * 1000
-        record_telemetry(source, "L1-Memory", f"第二大脑写入 ({cat})", q, reply, lat)
+        record_telemetry(source, "L1-Memory", f"第二大脑写入 ({item['category']})", q, reply, lat)
         return {"voice_summary": reply, "result": reply, "model_id": "L1-Memory", "latency_ms": lat, "memory": item}
 
-    # ===== L1-B：离线“家庭第二大脑”检索 =====
-    if any(k in q for k in ("放哪了", "在哪放着", "停在哪", "记过什么", "有什么备忘", "有什么待办", "查一下备忘", "我的备忘")):
-        hits = search_memories(q, top_k=4)
+    # ===== L1-B：离线“家庭第二大脑”检索（自然口语全覆盖 + 严格时间窗口过滤） =====
+    mem_query_triggers = (
+        "放哪了", "在哪放着", "停在哪", "记过什么", "有什么备忘", "有什么待办",
+        "查一下备忘", "我的备忘", "什么事情", "什么事", "要做的事", "安排", "日程",
+        "计划", "提醒", "待办", "密码", "随手记"
+    )
+    if any(k in q for k in mem_query_triggers):
+        today = datetime.now().date()
+        wd_now = CN_WEEKDAY_NAMES[today.weekday()]
+        sr = search_memories(q, top_k=6)
+        hits = sr["items"]
+        win_lbl = sr["window_label"]
         if not hits:
-            reply = "本地记忆库里目前还没有相关记录。"
+            if win_lbl:
+                reply = f"查看了本地日程，{win_lbl}没有安排任何事项。"
+            else:
+                reply = "本地记忆库里目前还没有相关记录。"
             lat = (time.time() - start_t) * 1000
-            record_telemetry(source, "L1-Memory", "第二大脑检索", q, reply, lat)
+            record_telemetry(source, "L1-Memory", "第二大脑精准查询", q, reply, lat)
             return {"voice_summary": reply, "result": reply, "model_id": "L1-Memory", "latency_ms": lat}
-        ctx = "\n".join([f"- [{m['category']} · {m['created_at']}] {m['content']}" for m in hits])
+        ctx = "\n".join([format_memory_for_llm(m, today) for m in hits])
         res = run_llm_sync(
-            system_prompt="你是家庭离线记忆管家。请严格根据下方检索到的本地记录，用一句简短亲切的口语中文直接回答用户，不超过40字，不要编造。",
-            user_prompt=f"【本地记忆记录】\n{ctx}\n\n用户提问：{q}",
+            system_prompt=(
+                f"你是家庭离线记忆管家。今天是 {today.strftime('%Y年%m月%d日')} {wd_now}。"
+                "请严格依据下方检索到的真实本地记录回答用户，直接说出具体日期和事项，口语简短不超过45字，绝不编造。"
+            ),
+            user_prompt=f"【本地记忆记录（已按时间窗口筛选）】\n{ctx}\n\n用户提问：{q}",
             model_id=primary,
             enable_thinking=False,
-            max_tokens=90,
+            max_tokens=100,
             temperature=0.1,
         )
         reply = res["text"] or f"找到记录：{hits[0]['content']}"
-        record_telemetry(source, primary, "第二大脑 RAG 召回", q, reply, res["latency_ms"])
+        record_telemetry(source, primary, f"第二大脑 RAG ({win_lbl or '关键词'})", q, reply, res["latency_ms"])
         return {"voice_summary": reply, "result": reply, "model_id": primary, "latency_ms": res["latency_ms"]}
 
     # ===== L2：智能家居设备控制（精准判定，杜绝误伤闲聊） =====
@@ -819,7 +964,8 @@ async def ollama_chat(request: Request):
         if m.get("role") == "user":
             user_query = m.get("content", "")
             break
-    target_mid = req_model.split(":")[0] if req_model.split(":")[0] in MODEL_CATALOG else get_default_primary_id()
+    # 始终以控制塔选定的主力模型为准（在控制塔切模型后全屋立即生效，无需重配 HA）
+    target_mid = get_default_primary_id()
     res = await asyncio.to_thread(handle_voice_query_sync, user_query, "Cardputer / HA Assist", target_mid, False)
     reply = res.get("voice_summary", "收到。")
     lat = res.get("latency_ms", 0)
