@@ -31,91 +31,48 @@ inline void record_rssi(float rssi, uint32_t now) {
   }
 }
 
-// ===== 真实 Bosch BMI270 6 轴 IMU 轻量驱动 (I2C 0x69) =====
-struct BMI270State {
-  bool ready = false;
-  uint8_t chip_id = 0;
+// ===== 基于 ESPHome 官方内置 BMI270 组件 (含完整 8KB 微码校准) 的真实姿态手势检测 =====
+struct ImuGestureTracker {
   float ax = 0.0f;
   float ay = 0.0f;
   float az = 1.0f;
-  float prev_ax = 0.0f;
-  float prev_ay = 0.0f;
-  float prev_az = 1.0f;
+  bool initialized = false;
   int face_down_cnt = 0;
-  uint32_t last_poll_ms = 0;
 
-  bool write_reg(esphome::i2c::I2CBus *bus, uint8_t reg, uint8_t val) {
-    uint8_t buf[2] = {reg, val};
-    return bus->write(0x69, buf, 2) == esphome::i2c::ERROR_OK;
-  }
-
-  bool read_regs(esphome::i2c::I2CBus *bus, uint8_t reg, uint8_t *dst, size_t len) {
-    if (bus->write(0x69, &reg, 1, false) != esphome::i2c::ERROR_OK) return false;
-    return bus->read(0x69, dst, len) == esphome::i2c::ERROR_OK;
-  }
-
-  void init(esphome::i2c::I2CBus *bus) {
-    if (!bus) return;
-    uint8_t id = 0;
-    if (!read_regs(bus, 0x00, &id, 1)) {
-      ESP_LOGW("bmi270", "Failed to read BMI270 CHIP_ID at 0x69");
-      return;
+  // 输入官方校准后的真实重力加速度 (单位: g)
+  // 返回值：0=无手势, 1=翻扣桌面触发息屏静音, 2=拿起/翻正触发唤醒
+  int on_accel(float nx, float ny, float nz, bool is_sleeping) {
+    if (std::isnan(nx) || std::isnan(ny) || std::isnan(nz)) return 0;
+    float prev_ax = ax, prev_ay = ay, prev_az = az;
+    if (!initialized) {
+      ax = nx; ay = ny; az = nz;
+      initialized = true;
+      return 0;
     }
-    chip_id = id;
-    // 关闭高级省电模式，开启 100Hz ±2g 加速度计
-    write_reg(bus, 0x7C, 0x00); // PWR_CONF: adv_power_save = 0
-    delay(2);
-    write_reg(bus, 0x40, 0xA8); // ACC_CONF: 100Hz, normal
-    write_reg(bus, 0x41, 0x00); // ACC_RANGE: +/-2g (16384 LSB/g)
-    write_reg(bus, 0x7D, 0x04); // PWR_CTRL: acc_en = 1
-    delay(2);
-    ready = (id == 0x24);
-    ESP_LOGI("bmi270", "BMI270 init done: chip_id=0x%02X ready=%s", id, ready ? "true" : "false");
-  }
+    ax = ax * 0.35f + nx * 0.65f;
+    ay = ay * 0.35f + ny * 0.65f;
+    az = az * 0.35f + nz * 0.65f;
 
-  // 返回值：0=无手势, 1=翻扣桌面触发息屏, 2=拿起/翻正触发唤醒
-  int poll(esphome::i2c::I2CBus *bus, bool is_sleeping) {
-    if (!ready || !bus) return 0;
-    uint32_t now = millis();
-    if (now - last_poll_ms < 200) return 0;
-    last_poll_ms = now;
-
-    uint8_t raw[6] = {0};
-    if (!read_regs(bus, 0x0C, raw, 6)) return 0;
-
-    int16_t rx = (int16_t)((raw[1] << 8) | raw[0]);
-    int16_t ry = (int16_t)((raw[3] << 8) | raw[2]);
-    int16_t rz = (int16_t)((raw[5] << 8) | raw[4]);
-
-    prev_ax = ax; prev_ay = ay; prev_az = az;
-    // 一阶低通滤波平滑抖动
-    float nx = rx / 16384.0f;
-    float ny = ry / 16384.0f;
-    float nz = rz / 16384.0f;
-    ax = ax * 0.4f + nx * 0.6f;
-    ay = ay * 0.4f + ny * 0.6f;
-    az = az * 0.4f + nz * 0.6f;
-
-    // 手势 1：屏幕朝下翻扣在桌面 (az < -0.78g 持续 2 次采样 = 400ms)
+    // 手势 1：屏幕朝下翻扣桌面 (az < -0.78g 连续 2 次采样 = 400ms)
     if (az < -0.78f) {
       face_down_cnt++;
       if (face_down_cnt == 2 && !is_sleeping) {
-        return 1; // 触发翻扣息屏静音
+        return 1;
       }
     } else {
       face_down_cnt = 0;
-      // 手势 2：休眠状态下被拿起或翻正 (加速度变化显著且非倒扣)
+      // 手势 2：休眠状态下被拿起或翻正
       if (is_sleeping && az > -0.35f) {
         float delta = std::abs(ax - prev_ax) + std::abs(ay - prev_ay) + std::abs(az - prev_az);
-        if (delta > 0.22f) {
-          return 2; // 触发拿起唤醒
+        if (delta > 0.20f) {
+          return 2;
         }
       }
     }
     return 0;
   }
 };
-static BMI270State imu;
+static ImuGestureTracker imu_tracker;
 
 // 麦克风原始 PCM 采样计算 RMS 均方根音量 (每秒被 I2S 回调触发多次)
 inline void on_mic_data(const std::vector<uint8_t> &data) {

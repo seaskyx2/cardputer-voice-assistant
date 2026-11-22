@@ -8,7 +8,7 @@ import asyncio
 import threading
 import psutil
 import httpx
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -39,7 +39,7 @@ DATA_DIR = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "data"))
 DASHBOARD_DIR = os.getenv("DASHBOARD_DIR", os.path.join(BASE_DIR, "dashboard"))
 OLLAMA_URL = os.getenv("OLLAMA_URL", "").rstrip("/")  # 若配置则走外部 Ollama；留空则使用本机 llama_cpp 直载 GGUF
 PORT = int(os.getenv("PORT", "8096"))
-N_THREADS = int(os.getenv("LLM_THREADS", "6"))
+N_THREADS = int(os.getenv("LLM_THREADS", "4"))
 
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "memory.db")
@@ -316,6 +316,8 @@ def load_local_llm(model_id: str):
         model_path=path,
         n_ctx=2048,
         n_threads=N_THREADS,
+        n_threads_batch=8,
+        n_batch=512,
         verbose=False,
     )
     LOADED_LLMS[model_id] = llm
@@ -522,6 +524,54 @@ def ha_telemetry_pusher():
 
 threading.Thread(target=ha_telemetry_pusher, daemon=True).start()
 
+# ── 多轮对话上下文滑动窗口缓存（保留最近 3 分钟内的多轮问答，支撑连贯追问） ────────
+RECENT_DIALOG_HISTORY: List[Dict[str, Any]] = []  # [{"role": "user"|"assistant", "content": str, "ts": float}]
+
+def get_recent_history(incoming_msgs: Optional[List[Dict[str, str]]] = None, max_turns: int = 6) -> List[Dict[str, str]]:
+    now = time.time()
+    # 清理超过 180 秒的过期历史
+    while RECENT_DIALOG_HISTORY and (now - RECENT_DIALOG_HISTORY[0]["ts"] > 180):
+        RECENT_DIALOG_HISTORY.pop(0)
+    # 若上游（HA / OpenAI 客户端）已携带多轮 user/assistant 历史，优先提取上游历史（不含最后一条当前 user）
+    if incoming_msgs:
+        filtered = [
+            {"role": m["role"], "content": m["content"]}
+            for m in incoming_msgs[:-1]
+            if m.get("role") in ("user", "assistant") and m.get("content")
+        ]
+        if filtered:
+            return filtered[-max_turns:]
+    return [{"role": x["role"], "content": x["content"]} for x in RECENT_DIALOG_HISTORY[-max_turns:]]
+
+def append_recent_turn(user_q: str, assistant_a: str):
+    now = time.time()
+    if user_q:
+        RECENT_DIALOG_HISTORY.append({"role": "user", "content": user_q, "ts": now})
+    if assistant_a:
+        RECENT_DIALOG_HISTORY.append({"role": "assistant", "content": assistant_a, "ts": now})
+    while len(RECENT_DIALOG_HISTORY) > 10:
+        RECENT_DIALOG_HISTORY.pop(0)
+
+def warmup_primary_model():
+    if OLLAMA_URL:
+        return
+    time.sleep(1.0)
+    try:
+        pid = get_default_primary_id()
+        with LLM_LOCK:
+            llm = load_local_llm(pid)
+            if llm is not None:
+                llm.create_chat_completion(
+                    messages=[{"role": "user", "content": "你好 /no_think"}],
+                    max_tokens=4,
+                    temperature=0.0,
+                )
+                print(f"[AI-Legion] Warmup completed for {pid}, model resident in RAM!")
+    except Exception as e:
+        print(f"[AI-Legion] Warmup warning: {e}")
+
+threading.Thread(target=warmup_primary_model, daemon=True).start()
+
 # ── 统一 LLM 推理封装（带线程锁 + Qwen3 双模 /no_think 支持） ────────────────────
 def run_llm_sync(
     system_prompt: str,
@@ -530,9 +580,11 @@ def run_llm_sync(
     enable_thinking: bool = False,
     max_tokens: int = 220,
     temperature: float = 0.2,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     target_id = model_id if (model_id in MODEL_CATALOG) else get_default_primary_id()
     start_t = time.time()
+    hist = history or []
 
     # 若配置了外部 Ollama（Docker 开源部署模式），走 HTTP 调用
     if OLLAMA_URL:
@@ -542,10 +594,7 @@ def run_llm_sync(
                 user_msg = user_prompt + " /no_think"
             payload = {
                 "model": os.getenv("DEFAULT_MODEL", "qwen3:4b"),
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_msg},
-                ],
+                "messages": [{"role": "system", "content": system_prompt}] + hist + [{"role": "user", "content": user_msg}],
                 "stream": False,
                 "options": {"temperature": temperature, "num_predict": max_tokens},
             }
@@ -569,27 +618,14 @@ def run_llm_sync(
             meta = MODEL_CATALOG[target_id]
             user_msg = user_prompt
             if meta["family"] == "qwen3":
-                # Qwen3 原生快慢双模指令
                 user_msg = f"{user_prompt}\n/think" if enable_thinking else f"{user_prompt}\n/no_think"
-                resp = llm.create_chat_completion(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
-                raw = resp["choices"][0]["message"]["content"].strip()
-            else:
-                resp = llm.create_chat_completion(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
-                raw = resp["choices"][0]["message"]["content"].strip()
+            full_msgs = [{"role": "system", "content": system_prompt}] + hist + [{"role": "user", "content": user_msg}]
+            resp = llm.create_chat_completion(
+                messages=full_msgs,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            raw = resp["choices"][0]["message"]["content"].strip()
 
             clean = raw
             if not enable_thinking:
@@ -619,10 +655,46 @@ def schedule_async_actions(actions: List[Dict[str, Any]]):
     threading.Thread(target=worker, daemon=True).start()
 
 # ── 统一智能体路由管线（L0 规则 -> L1 第二大脑 -> L2 家电控制 -> L3 闲聊） ─────────
-def handle_voice_query_sync(query: str, source: str = "Voice", preferred_model: str = None, force_think: bool = False) -> Dict[str, Any]:
+def get_real_ha_weather() -> Optional[str]:
+    for s in get_ha_states_cached():
+        eid = s.get("entity_id", "")
+        if eid.startswith("weather.") and s.get("state") not in ("unknown", "unavailable", ""):
+            attrs = s.get("attributes", {})
+            temp = attrs.get("temperature")
+            hum = attrs.get("humidity")
+            cond = s.get("state")
+            parts = [f"天气状态 {cond}"]
+            if temp is not None:
+                parts.append(f"气温 {temp} 度")
+            if hum is not None:
+                parts.append(f"湿度百分之 {hum}")
+            return "，".join(parts)
+    return None
+
+def handle_voice_query_sync(
+    query: str,
+    source: str = "Voice",
+    preferred_model: str = None,
+    force_think: bool = False,
+    incoming_messages: Optional[List[Dict[str, str]]] = None,
+) -> Dict[str, Any]:
     start_t = time.time()
-    q = query.strip()
+    q = re.sub(r"^[^\w\u4e00-\u9fff]+|[^\w\u4e00-\u9fff？?！!。，,]+$", "", (query or "").strip())
+    if not re.sub(r"[^\w\u4e00-\u9fff]+", "", q):
+        return {"voice_summary": "没听清，请再说一遍。", "result": "空语音已忽略", "model_id": "L0-Guard", "latency_ms": 0.1}
     primary = preferred_model if (preferred_model in MODEL_CATALOG) else get_default_primary_id()
+
+    # ===== L0-Weather：室外天气与气温诚实查询（有传感器报真值，无传感器绝不瞎编） =====
+    if any(k in q for k in ("天气", "气温", "下雨", "下雪", "刮风", "多少度")) and not any(d in q for d in ("空调", "调到", "设为")):
+        w_info = get_real_ha_weather()
+        if w_info:
+            reply = f"根据家庭气象实体数据，当前{w_info}。"
+        else:
+            reply = "当前处于纯离线模式，Home Assistant 尚未接入室外气象或温度传感器，无法查询实时天气。"
+        lat = (time.time() - start_t) * 1000
+        append_recent_turn(q, reply)
+        record_telemetry(source, "L0-Weather", "离线气象诚实核验", q, reply, lat)
+        return {"voice_summary": reply, "result": reply, "model_id": "L0-Weather", "latency_ms": lat}
 
     # ===== L0-A：极速时间查询 (<1ms) =====
     if any(k in q for k in ("现在几点", "几点了", "几号", "星期几", "周几")) and len(q) <= 14:
@@ -692,6 +764,7 @@ def handle_voice_query_sync(query: str, source: str = "Voice", preferred_model: 
             temperature=0.1,
         )
         reply = res["text"] or f"找到记录：{hits[0]['content']}"
+        append_recent_turn(q, reply)
         record_telemetry(source, primary, f"第二大脑 RAG ({win_lbl or '关键词'})", q, reply, res["latency_ms"])
         return {"voice_summary": reply, "result": reply, "model_id": primary, "latency_ms": res["latency_ms"]}
 
@@ -779,11 +852,21 @@ def handle_voice_query_sync(query: str, source: str = "Voice", preferred_model: 
             "latency_ms": lat,
         }
 
-    # ===== L3：纯本地自然语言对话（支持快/慢双模） =====
-    sys_prompt = "你是运行在家庭边缘主机 nuctutu 上的本地语音助手。请用简短、自然、纯口语的中文回答（不超过45字），严禁输出代码块或 Markdown 符号。"
-    res = run_llm_sync(sys_prompt, q, model_id=primary, enable_thinking=force_think, max_tokens=380 if force_think else 110, temperature=0.4)
+    # ===== L3：纯本地多轮自然语言对话（支持快/慢双模 + 上下文追问连贯） =====
+    today = datetime.now().date()
+    wd_now = CN_WEEKDAY_NAMES[today.weekday()]
+    hist = get_recent_history(incoming_messages, max_turns=6)
+    sys_prompt = (
+        f"你是运行在家庭边缘主机 nuctutu 上的纯离线语音管家。今天是 {today.strftime('%Y年%m月%d日')} {wd_now}。"
+        "请结合上下文用简短、自然、纯口语的中文回答（不超过45字），严禁编造实时联网信息，严禁输出代码块或 Markdown 符号。"
+    )
+    res = run_llm_sync(
+        sys_prompt, q, model_id=primary, enable_thinking=force_think,
+        max_tokens=380 if force_think else 90, temperature=0.35, history=hist
+    )
     reply = res["text"] or "我在，有什么可以帮你的？"
-    record_telemetry(source, primary, "深度推理" if force_think else "端侧快速对话", q, reply, res["latency_ms"])
+    append_recent_turn(q, reply)
+    record_telemetry(source, primary, "深度推理" if force_think else "端侧多轮对话", q, reply, res["latency_ms"])
     return {
         "voice_summary": reply,
         "result": res["raw"] if force_think else reply,
@@ -823,6 +906,8 @@ def api_models():
     for mid, meta in MODEL_CATALOG.items():
         path = os.path.join(MODELS_DIR, meta["filename"])
         exists = os.path.exists(path)
+        if not exists and not OLLAMA_URL:
+            continue
         size_gb = round(os.path.getsize(path) / (1024**3), 2) if exists else 0.0
         ensure_model_stats(mid)
         st = MODEL_STATS[mid]
@@ -927,7 +1012,7 @@ def ollama_tags():
             models.append({
                 "name": f"{mid}:latest",
                 "model": f"{mid}:latest",
-                "modified_at": datetime.utcnow().isoformat() + "Z",
+                "modified_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "size": os.path.getsize(path) if os.path.exists(path) else 2500000000,
                 "digest": f"sha256:{mid}",
                 "details": {
@@ -966,12 +1051,12 @@ async def ollama_chat(request: Request):
             break
     # 始终以控制塔选定的主力模型为准（在控制塔切模型后全屋立即生效，无需重配 HA）
     target_mid = get_default_primary_id()
-    res = await asyncio.to_thread(handle_voice_query_sync, user_query, "Cardputer / HA Assist", target_mid, False)
+    res = await asyncio.to_thread(handle_voice_query_sync, user_query, "Cardputer / HA Assist", target_mid, False, messages)
     reply = res.get("voice_summary", "收到。")
     lat = res.get("latency_ms", 0)
     return {
         "model": req_model,
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "message": {"role": "assistant", "content": reply},
         "done": True,
         "total_duration": int(lat * 1_000_000),
@@ -996,7 +1081,7 @@ async def openai_chat_completions(request: Request):
         if m.get("role") == "user":
             user_query = m.get("content", "")
             break
-    res = await asyncio.to_thread(handle_voice_query_sync, user_query, "小爱音箱 (OpenAI API)", None, False)
+    res = await asyncio.to_thread(handle_voice_query_sync, user_query, "小爱音箱 (OpenAI API)", None, False, messages)
     reply = res.get("voice_summary", "收到。")
     return {
         "id": f"chatcmpl-{int(time.time())}",

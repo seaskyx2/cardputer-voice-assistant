@@ -1,3 +1,4 @@
+import re
 import asyncio
 import time
 import logging
@@ -52,13 +53,18 @@ WYOMING_INFO = Info(
 )
 
 def decode_pcm_sync(audio_bytes: bytes, sample_rate: int = 16000) -> str:
-    if not audio_bytes:
+    if not audio_bytes or len(audio_bytes) < 3200:  # < 0.1s 极短噪声直接忽略
         return ""
     samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
     stream = recognizer.create_stream()
     stream.accept_waveform(sample_rate, samples)
     recognizer.decode_stream(stream)
-    return stream.result.text.strip()
+    raw_text = stream.result.text.strip()
+    # 剥离标点与空白后若无任何有效汉字/字母/数字（如底噪吐出的单个“。”），过滤为空串
+    meaningful = re.sub(r"[^\w\u4e00-\u9fff]+", "", raw_text)
+    if not meaningful:
+        return ""
+    return raw_text
 
 class SenseVoiceHandler(AsyncEventHandler):
     def __init__(self, *args, **kwargs):
@@ -67,34 +73,38 @@ class SenseVoiceHandler(AsyncEventHandler):
         self.sample_rate = 16000
 
     async def handle_event(self, event: Event) -> bool:
-        if Describe.is_type(event.type):
-            await self.write_event(WYOMING_INFO.event())
-            return True
+        try:
+            if Describe.is_type(event.type):
+                await self.write_event(WYOMING_INFO.event())
+                return True
 
-        if Transcribe.is_type(event.type):
-            self.audio_buffer.clear()
-            return True
+            if Transcribe.is_type(event.type):
+                self.audio_buffer.clear()
+                return True
 
-        if AudioStart.is_type(event.type):
-            start = AudioStart.from_event(event)
-            self.sample_rate = start.rate or 16000
-            self.audio_buffer.clear()
-            return True
+            if AudioStart.is_type(event.type):
+                start = AudioStart.from_event(event)
+                self.sample_rate = start.rate or 16000
+                self.audio_buffer.clear()
+                return True
 
-        if AudioChunk.is_type(event.type):
-            chunk = AudioChunk.from_event(event)
-            self.audio_buffer.extend(chunk.audio)
-            return True
+            if AudioChunk.is_type(event.type):
+                chunk = AudioChunk.from_event(event)
+                self.audio_buffer.extend(chunk.audio)
+                return True
 
-        if AudioStop.is_type(event.type):
-            t0 = time.time()
-            raw = bytes(self.audio_buffer)
-            self.audio_buffer.clear()
-            async with asr_lock:
-                text = await asyncio.to_thread(decode_pcm_sync, raw, self.sample_rate)
-            cost_ms = (time.time() - t0) * 1000
-            _LOGGER.info(f"Transcribed ({len(raw)} bytes, {cost_ms:.1f}ms): {text}")
-            await self.write_event(Transcript(text=text).event())
+            if AudioStop.is_type(event.type):
+                t0 = time.time()
+                raw = bytes(self.audio_buffer)
+                self.audio_buffer.clear()
+                async with asr_lock:
+                    text = await asyncio.to_thread(decode_pcm_sync, raw, self.sample_rate)
+                cost_ms = (time.time() - t0) * 1000
+                _LOGGER.info(f"Transcribed ({len(raw)} bytes, {cost_ms:.1f}ms): {text!r}")
+                await self.write_event(Transcript(text=text).event())
+                return False
+        except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
+            _LOGGER.info("Client cancelled/disconnected during transcription, closing stream cleanly.")
             return False
 
         return True
