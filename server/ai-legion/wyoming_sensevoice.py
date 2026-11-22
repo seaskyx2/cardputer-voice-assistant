@@ -56,6 +56,10 @@ def decode_pcm_sync(audio_bytes: bytes, sample_rate: int = 16000) -> str:
     if not audio_bytes or len(audio_bytes) < 3200:  # < 0.1s 极短噪声直接忽略
         return ""
     samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+    # 物理声学 RMS 门限 (-50 dBFS)：纯静音或微弱底噪直接拦截，根除神经网络静音幻觉（如吐“没。”/“嗯。”）
+    rms = float(np.sqrt(np.mean(samples * samples)))
+    if rms < 0.003:
+        return ""
     stream = recognizer.create_stream()
     stream.accept_waveform(sample_rate, samples)
     recognizer.decode_stream(stream)
