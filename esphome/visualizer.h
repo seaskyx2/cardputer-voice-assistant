@@ -31,11 +31,21 @@ inline void record_rssi(float rssi, uint32_t now) {
   }
 }
 
-// ===== 基于 ESPHome 官方内置 BMI270 组件 (含完整 8KB 微码校准) 的真实姿态手势检测 =====
+// ===== 基于 ESPHome 官方内置 BMI270 组件 (含完整 8KB 微码校准) 的姿态手势与双轴电子水平仪 =====
 struct ImuGestureTracker {
   float ax = 0.0f;
   float ay = 0.0f;
   float az = 1.0f;
+  // 专供电子水平仪的高稳态低通滤波重力分量
+  float lvl_ax = 0.0f;
+  float lvl_ay = 0.0f;
+  float lvl_az = 1.0f;
+  // 相对归零校准偏移量 (Tare / Zeroing)
+  bool zero_enabled = false;
+  float zero_roll = 0.0f;
+  float zero_pitch = 0.0f;
+  float zero_edge = 0.0f;
+
   bool initialized = false;
   int face_down_cnt = 0;
 
@@ -46,6 +56,7 @@ struct ImuGestureTracker {
     float prev_ax = ax, prev_ay = ay, prev_az = az;
     if (!initialized) {
       ax = nx; ay = ny; az = nz;
+      lvl_ax = nx; lvl_ay = ny; lvl_az = nz;
       initialized = true;
       return 0;
     }
@@ -53,10 +64,15 @@ struct ImuGestureTracker {
     ay = ay * 0.35f + ny * 0.65f;
     az = az * 0.35f + nz * 0.65f;
 
-    // 手势 1：屏幕朝下翻扣桌面 (az < -0.78g 连续 2 次采样 = 400ms)
+    // 水平仪平滑二阶手感滤波 (兼顾丝滑跟手与 0.1° 静止稳定度)
+    lvl_ax = lvl_ax * 0.72f + nx * 0.28f;
+    lvl_ay = lvl_ay * 0.72f + ny * 0.28f;
+    lvl_az = lvl_az * 0.72f + nz * 0.28f;
+
+    // 手势 1：屏幕朝下翻扣桌面 (az < -0.78g 连续 5 次采样 ≈ 400ms @ 80ms interval)
     if (az < -0.78f) {
       face_down_cnt++;
-      if (face_down_cnt == 2 && !is_sleeping) {
+      if (face_down_cnt == 5 && !is_sleeping) {
         return 1;
       }
     } else {
@@ -71,6 +87,46 @@ struct ImuGestureTracker {
     }
     return 0;
   }
+
+  float raw_roll_deg() const {
+    float z = std::max(0.001f, std::abs(lvl_az));
+    return std::atan2(lvl_ax, z) * 57.2957795f;
+  }
+
+  float raw_pitch_deg() const {
+    float z = std::max(0.001f, std::abs(lvl_az));
+    return std::atan2(lvl_ay, z) * 57.2957795f;
+  }
+
+  float raw_edge_deg() const {
+    if (std::abs(lvl_ay) >= std::abs(lvl_ax)) {
+      float y = std::max(0.001f, std::abs(lvl_ay));
+      return std::atan2(lvl_ax, y) * 57.2957795f;
+    } else {
+      float x = std::max(0.001f, std::abs(lvl_ax));
+      return std::atan2(lvl_ay, x) * 57.2957795f;
+    }
+  }
+
+  void toggle_zero() {
+    if (zero_enabled) {
+      zero_enabled = false;
+      zero_roll = 0.0f;
+      zero_pitch = 0.0f;
+      zero_edge = 0.0f;
+    } else {
+      zero_enabled = true;
+      zero_roll = raw_roll_deg();
+      zero_pitch = raw_pitch_deg();
+      zero_edge = raw_edge_deg();
+    }
+  }
+
+  float get_roll_deg() const { return raw_roll_deg() - (zero_enabled ? zero_roll : 0.0f); }
+  float get_pitch_deg() const { return raw_pitch_deg() - (zero_enabled ? zero_pitch : 0.0f); }
+  float get_edge_deg() const { return raw_edge_deg() - (zero_enabled ? zero_edge : 0.0f); }
+  bool is_flat_mode() const { return std::abs(lvl_az) > 0.50f; }
+  bool is_plumb_mode() const { return !is_flat_mode() && (std::abs(lvl_ax) > std::abs(lvl_ay)); }
 };
 static ImuGestureTracker imu_tracker;
 

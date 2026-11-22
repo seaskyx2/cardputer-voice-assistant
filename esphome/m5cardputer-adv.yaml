@@ -17,7 +17,7 @@ esphome:
               d.acceleration[esphome::motion::Z_AXIS],
               id(is_sleeping)
             );
-            if (g == 1) {
+            if (g == 1 && id(ui_mode) != 4) {
               id(echo_speaker)->stop();
               if (id(va_state) != 0) {
                 id(va_comp)->request_stop();
@@ -157,7 +157,7 @@ globals:
     initial_value: "false"
   - id: ui_mode
     type: int
-    initial_value: "0" # 0: 语音脉冲, 1: 桌面副屏与备忘, 2: 集群算力雷达, 3: 掌上家电遥控面板
+    initial_value: "0" # 0: 语音脉冲, 1: 桌面副屏与备忘, 2: 集群算力雷达, 3: 掌上家电遥控, 4: 双轴电子水平仪
   - id: dev_cursor
     type: int
     initial_value: "0"
@@ -223,7 +223,7 @@ font:
     ignore_missing_glyphs: true
     glyphs:
       - ' !"#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_abcdefghijklmnopqrstuvwxyz{|}~'
-      - '一七万三上下不与专且世业丝两严个中丰临为主举久么义之乌乎乏乐乔乙九乞也乡书买乱了予事二于亏云互五些交产京亭亮亲人什仁仅今从他付代令以仪们件价任份仿企休优会伞伟传伤伯伸似但位低住体何余佛作你使來供依便促保信修個倍們倒候借倾假偏做停健偶傅傍傻像儿允元兄充先光克免兔入全公六兰共关兴其具典养内再冒写农冬冰决况冷净准凉减几凭凶出刀分切列则刚初别刮到制刻前剖力办功加务劣动助勺匀包化北匹区医十千升午半华协单卖南卡卧卫印危卸厂厅历压厚原厨去参又及友双反发取受变口古句另只叫召可台史右叶号叹吃各合同名后向吓吗否吧吨含听启吸吹呀呆告员呜周味呼命和咖咬咱响哑哥哪售唯唱商啥喊喜喝嗅器四回因团困围固国图圆圈國土在地场坏坐块坚坡城域基堂塔墙增墨壤士壮声处备复夏夕外多夜够大天太夫央失头夹奇奏奖套女奶她好如妈妥妹妻始姐姑姓委姥威娃娘婆嫩子孔字存孙学孩學它守安完宗宙定宜宝实客宣室害家容宽宿寄密富察實对寻导封射将尊對小少尔尖尘尚尝尤就尾局层居屋屏展属山岁岂岛岩峡峰崖州工左巧巨差己已巾市师希帘带席帮常干平年并广庄庆床序库应底店府度座庭康廊建开弄式弟张弱弹强当录形彩影往待很後徒得微德心必忍志忘忙快念忽怀态怎怕思急性怪总息您悬情想意感愣愿慢慰懂懒戏成我或戴户房所扇手打扔托执扫扬扰扶批找承技抄把抓投抛护报抱押担拉拍拒拜拥拿指按挖挺捉捏损换捧据授掉掌排探接控推掷描提插握搞搬携摄摇摸撒播支收改放政故效敏救教敢散数整文斗料斤断斯新方施旁旅旗无既日旧旨早时明昏易星映春昨是昼显時晒晚晨普景晴智暂暖暗暮暴曲更會月有朋服朗望期木未末本术朵机杀杂权李材村条来杯板极构析林果枝架某柑柜查柱柿标栏树校样核根格桃案桌桥梢梦梯检棕森棵椅楚楼概模樣橘橙機欠次欢欺款歌止正步死段母每比毛毫毯氏民气水汁求汉江池汤汪汽沉沒没河治泉法泡波泥注泼洗洞津洲活流浅济浪浮浴海涂消涉涨淘深清渐温渴游湖湿源溜滑满漂漆漏演潮火灭灯灰灶灾炉点為烂烈烟烧热焦焰然照熊熟燈爬爱父爷爸爹片牌牙牛牢物牵特状狂狗狮猛猫率玉王玩环现現球理瓦瓶甜生用田由甲申电男画界畏留疑疼病症痛瘦登發白百的皮盆盒盘目直相看真眠眼着睛睡瞧矣知短石矿码砂研硬确碗碰磁示礼社祈祖祝神票福离秀私秋种科秒租积称程稍税種稳穷空突窄窗窝立站章童笑符第等答筛筷签简算管箱篇米粉粒粗粮精糖系索紫累經红级纪纯线组细织终绍经结绕绘给络绝统继绪续维绿缀缓编缩缺网置羊美翻耀老考者而耍耳聊聚聽肉肖肥育胃胖能脏脑脱腕腰腿自至與舌舍舒舞舟航良色节芝花芽苍若苦英苹范茶草荣药荷莫菜落著蒙蓄蓝蔚薄虎虑虽蛇蛋蛮蜜蜡融行街衣补表袋袖被装裏西要見见观规觅视览觉解言話說警计认讨让训记讲许论设访评识诉词译试诗话询语说请读课谁调谈谢象豪貌负责败账质购贴贵贸费资赏赔赚赞赠赢走赶起超越趣足跑距跟路跳踢躲躺车转轮软轻载辅输辰边达迁迅过迎运近返还这进远连迟迫述退送适逃选透逐這通造逢進遇遍過道遥那邻郊郎部都酒酬酸醒里重野量金钟钢钱铁铅铜银铸铺锁锅错键镜长開關门闭问间闹闻阅队防阳阴阶阻附际陆陈降限院除陪随隐障难雀雅集雇雨雪雷電雾需霖霜露青静非靠面靴鞋鞘音題页顶项顺顾顿预领频颗题颜风飘飞食餐饭饮饱饿馆首香马验骨體高鱼鲜鸟鸡鸣鸭麦麻麼黄黑點鼻齐折境闲姿堆副侧冲刷博即吐吞唤型屉抽挥最松版省端群脉触误赛速宏幕异扣操朝熄监瞬址官持轴途驱°·—‘’“”…℃、。《》【】！（），：；？该'
+      - '一七万三上下不与专且世业丝两严个中丰临为主举久么义之乌乎乏乐乔乙九乞也乡书买乱了予事二于亏云互五些交产京亭亮亲人什仁仅今从他付代令以仪们件价任份仿企休优会伞伟传伤伯伸似但位低住体何余佛作你使來供依便促保信修個倍們倒候借倾假偏做停健偶傅傍傻像儿允元兄充先光克免兔入全公六兰共关兴其具典养内再冒写农冬冰决况冷净准凉减几凭凶出刀分切列则刚初别刮到制刻前剖力办功加务劣动助勺匀包化北匹区医十千升午半华协单卖南卡卧卫印危卸厂厅历压厚原厨去参又及友双反发取受变口古句另只叫召可台史右叶号叹吃各合同名后向吓吗否吧吨含听启吸吹呀呆告员呜周味呼命和咖咬咱响哑哥哪售唯唱商啥喊喜喝嗅器四回因团困围固国图圆圈國土在地场坏坐块坚坡城域基堂塔墙增墨壤士壮声处备复夏夕外多夜够大天太夫央失头夹奇奏奖套女奶她好如妈妥妹妻始姐姑姓委姥威娃娘婆嫩子孔字存孙学孩學它守安完宗宙定宜宝实客宣室害家容宽宿寄密富察實对寻导封射将尊對小少尔尖尘尚尝尤就尾局层居屋屏展属山岁岂岛岩峡峰崖州工左巧巨差己已巾市师希帘带席帮常干平年并广庄庆床序库应底店府度座庭康廊建开弄式弟张弱弹强当录形彩影往待很後徒得微德心必忍志忘忙快念忽怀态怎怕思急性怪总息您悬情想意感愣愿慢慰懂懒戏成我或戴户房所扇手打扔托执扫扬扰扶批找承技抄把抓投抛护报抱押担拉拍拒拜拥拿指按挖挺捉捏损换捧据授掉掌排探接控推掷描提插握搞搬携摄摇摸撒播支收改放政故效敏救教敢散数整文斗料斤断斯新方施旁旅旗无既日旧旨早时明昏易星映春昨是昼显時晒晚晨普景晴智暂暖暗暮暴曲更會月有朋服朗望期木未末本术朵机杀杂权李材村条来杯板极构析林果枝架某柑柜查柱柿标栏树校样核根格桃案桌桥梢梦梯检棕森棵椅楚楼概模樣橘橙機欠次欢欺款歌止正步死段母每比毛毫毯氏民气水汁求汉江池汤汪汽沉沒没河治泉法泡波泥注泼洗洞津洲活流浅济浪浮浴海涂消涉涨淘深清渐温渴游湖湿源溜滑满漂漆漏演潮火灭灯灰灶灾炉点為烂烈烟烧热焦焰然照熊熟燈爬爱父爷爸爹片牌牙牛牢物牵特状狂狗狮猛猫率玉王玩环现現球理瓦瓶甜生用田由甲申电男画界畏留疑疼病症痛瘦登發白百的皮盆盒盘目直相看真眠眼着睛睡瞧矣知短石矿码砂研硬确碗碰磁示礼社祈祖祝神票福离秀私秋种科秒租积称程稍税種稳穷空突窄窗窝立站章童笑符第等答筛筷签简算管箱篇米粉粒粗粮精糖系索紫累經红级纪纯线组细织终绍经结绕绘给络绝统继绪续维绿缀缓编缩缺网置羊美翻耀老考者而耍耳聊聚聽肉肖肥育胃胖能脏脑脱腕腰腿自至與舌舍舒舞舟航良色节芝花芽苍若苦英苹范茶草荣药荷莫菜落著蒙蓄蓝蔚薄虎虑虽蛇蛋蛮蜜蜡融行街衣补表袋袖被装裏西要見见观规觅视览觉解言話說警计认讨让训记讲许论设访评识诉词译试诗话询语说请读课谁调谈谢象豪貌负责败账质购贴贵贸费资赏赔赚赞赠赢走赶起超越趣足跑距跟路跳踢躲躺车转轮软轻载辅输辰边达迁迅过迎运近返还这进远连迟迫述退送适逃选透逐這通造逢進遇遍過道遥那邻郊郎部都酒酬酸醒里重野量金钟钢钱铁铅铜银铸铺锁锅错键镜长開關门闭问间闹闻阅队防阳阴阶阻附际陆陈降限院除陪随隐障难雀雅集雇雨雪雷電雾需霖霜露青静非靠面靴鞋鞘音題页顶项顺顾顿预领频颗题颜风飘飞食餐饭饮饱饿馆首香马验骨體高鱼鲜鸟鸡鸣鸭麦麻麼黄黑點鼻齐折境闲姿堆副侧冲刷博即吐吞唤型屉抽挥最松版省端群脉触误赛速宏幕异扣操朝熄监瞬址官持轴途驱°·—‘’“”…℃、。《》【】！（），：；？该零斜归垂尺测恢'
 
 i2c:
   sda: GPIO08
@@ -348,7 +348,7 @@ tca8418_keypad:
                                       id(va_reply_text).clear();
                                       id(alert_active) = false;
                                       id(dialog_reset_active) = false;
-                                      id(ui_mode) = (id(ui_mode) + 1) % 4;
+                                      id(ui_mode) = (id(ui_mode) + 1) % 5;
                                       id(m5display).update();
                                 else:
                                   # ===== 物理宏键 1 (row=0, col=4)：一键全屋熄灯 =====
@@ -368,154 +368,144 @@ tca8418_keypad:
                                             id(alert_active) = true;
                                             id(m5display).update();
                                       else:
-                                        # ===== 物理宏键 2 (row=1, col=0)：一键专注息屏静音 =====
+                                        # ===== 快捷键组：宏键 2/3/4/5、第 5 屏回车归零、第 4 屏方向键选设备 =====
                                         - if:
                                             condition:
-                                              lambda: 'return (id(va_state) == 0) && (row == 1 && col == 0);'
+                                              lambda: |-
+                                                if (id(va_state) != 0) return false;
+                                                if (row == 1 && col == 0) return true; // 宏键 2: 息屏
+                                                if (row == 1 && col == 4) return true; // 宏键 3: 集群雷达
+                                                if (row == 2 && col == 0) return true; // 宏键 4: 掌上控家
+                                                if (row == 2 && col == 4) return true; // 宏键 5: 电子水平仪
+                                                if (id(ui_mode) == 4 && row == 6 && col == 6) return true; // 水平仪回车归零
+                                                if (id(ui_mode) == 3) {
+                                                  bool is_nav = (row == 5 && col == 6) || (row == 5 && col == 3) ||
+                                                                (row == 5 && col == 7) || (row == 6 && col == 3);
+                                                  if (is_nav) return true;
+                                                }
+                                                return false;
                                             then:
                                               - lambda: |-
-                                                  id(echo_speaker)->stop();
-                                                  id(is_sleeping) = true;
-                                                  id(is_dimmed) = false;
-                                                  id(disp_backlight)->turn_off().perform();
+                                                  if (row == 1 && col == 0) {
+                                                    id(echo_speaker)->stop();
+                                                    id(is_sleeping) = true;
+                                                    id(is_dimmed) = false;
+                                                    id(disp_backlight)->turn_off().perform();
+                                                    return;
+                                                  }
+                                                  if (row == 1 && col == 4) {
+                                                    id(ui_mode) = 2;
+                                                    id(alert_active) = false;
+                                                  } else if (row == 2 && col == 0) {
+                                                    id(ui_mode) = 3;
+                                                    id(alert_active) = false;
+                                                  } else if (row == 2 && col == 4) {
+                                                    id(ui_mode) = 4;
+                                                    id(alert_active) = false;
+                                                  } else if (id(ui_mode) == 4 && row == 6 && col == 6) {
+                                                    visualizer::imu_tracker.toggle_zero();
+                                                  } else if (id(ui_mode) == 3) {
+                                                    bool is_up = (row == 5 && col == 6) || (row == 5 && col == 3);
+                                                    int cur = id(dev_cursor);
+                                                    cur = is_up ? ((cur + 4) % 5) : ((cur + 1) % 5);
+                                                    id(dev_cursor) = cur;
+                                                    if (cur < id(dev_scroll)) id(dev_scroll) = cur;
+                                                    else if (cur >= id(dev_scroll) + 3) id(dev_scroll) = cur - 2;
+                                                    id(alert_active) = false;
+                                                  }
+                                                  id(m5display).update();
                                             else:
-                                              # ===== 物理宏键 3 (row=1, col=4)：一键直达集群算力监控 =====
+                                              # ===== 第 4 屏 [掌上控家] 按 Enter 回车静默切换开关 =====
                                               - if:
                                                   condition:
-                                                    lambda: 'return (id(va_state) == 0) && (row == 1 && col == 4);'
+                                                    lambda: 'return (id(va_state) == 0 && id(ui_mode) == 3 && row == 6 && col == 6);'
                                                   then:
                                                     - lambda: |-
-                                                        id(ui_mode) = 2;
-                                                        id(alert_active) = false;
+                                                        const char* eids[5] = {
+                                                          "light.living_room_ceiling",
+                                                          "light.bedroom_main",
+                                                          "light.router_indicator",
+                                                          "fan.standing_fan",
+                                                          "light.dining_room_ceiling"
+                                                        };
+                                                        std::string states[5] = {
+                                                          id(ha_dev_0).state,
+                                                          id(ha_dev_1).state,
+                                                          id(ha_dev_2).state,
+                                                          id(ha_dev_3).state,
+                                                          id(ha_dev_4).state
+                                                        };
+                                                        int idx = id(dev_cursor);
+                                                        if (idx < 0 || idx >= 5) idx = 0;
+                                                        std::string st = states[idx];
+                                                        if (st == "unavailable" || st == "unknown" || st.empty()) {
+                                                          id(target_toggle_entity) = "";
+                                                          id(alert_title) = "设备当前离线";
+                                                          id(alert_msg) = "该设备断电离线，请先检查物理开关";
+                                                          id(alert_start_ms) = millis();
+                                                          id(alert_dur_ms) = 1800;
+                                                          id(alert_active) = true;
+                                                        } else {
+                                                          id(target_toggle_entity) = eids[idx];
+                                                          id(dev_action_start_ms) = millis();
+                                                          id(dev_action_active) = true;
+                                                        }
                                                         id(m5display).update();
-                                                  else:
-                                                    # ===== 物理宏键 4 (row=2, col=0)：一键直达掌上家电遥控面板 =====
                                                     - if:
                                                         condition:
-                                                          lambda: 'return (id(va_state) == 0) && (row == 2 && col == 0);'
+                                                          lambda: 'return !id(target_toggle_entity).empty();'
+                                                        then:
+                                                          - homeassistant.service:
+                                                              service: homeassistant.toggle
+                                                              data:
+                                                                entity_id: !lambda 'return id(target_toggle_entity);'
+                                                  else:
+                                                    # ===== 其余按键：按当前状态处理（打断 / 停止录音 / 启动对讲）=====
+                                                    - if:
+                                                        condition:
+                                                          lambda: 'return id(va_state) == 3 || id(va_state) == 2;'
                                                         then:
                                                           - lambda: |-
-                                                              id(ui_mode) = 3;
-                                                              id(alert_active) = false;
+                                                              id(echo_speaker)->stop();
+                                                              id(va_state) = 0;
+                                                              id(va_status_msg) = "Interrupted";
+                                                              id(va_stt_text).clear();
+                                                              id(va_reply_text).clear();
+                                                              id(dialog_reset_active) = false;
                                                               id(m5display).update();
+                                                          - voice_assistant.stop:
                                                         else:
-                                                          # ===== 第 4 屏 [掌上家电遥控面板] 专属方向键与回车秒开关 =====
                                                           - if:
                                                               condition:
-                                                                lambda: |-
-                                                                  if (id(va_state) != 0 || id(ui_mode) != 3) return false;
-                                                                  bool is_up = (row == 5 && col == 6) || (row == 5 && col == 3);
-                                                                  bool is_dn = (row == 5 && col == 7) || (row == 6 && col == 3);
-                                                                  bool is_enter = (row == 6 && col == 6);
-                                                                  return is_up || is_dn || is_enter;
+                                                                lambda: 'return id(va_state) == 1;'
                                                               then:
-                                                                - if:
-                                                                    condition:
-                                                                      lambda: 'return (row == 6 && col == 6);'
-                                                                    then:
-                                                                      - lambda: |-
-                                                                          const char* eids[5] = {
-                                                                            "light.living_room_ceiling",
-                                                                            "light.bedroom_main",
-                                                                            "light.router_indicator",
-                                                                            "fan.standing_fan",
-                                                                            "light.dining_room_ceiling"
-                                                                          };
-                                                                          std::string states[5] = {
-                                                                            id(ha_dev_0).state,
-                                                                            id(ha_dev_1).state,
-                                                                            id(ha_dev_2).state,
-                                                                            id(ha_dev_3).state,
-                                                                            id(ha_dev_4).state
-                                                                          };
-                                                                          int idx = id(dev_cursor);
-                                                                          if (idx < 0 || idx >= 5) idx = 0;
-                                                                          std::string st = states[idx];
-                                                                          if (st == "unavailable" || st == "unknown" || st.empty()) {
-                                                                            id(target_toggle_entity) = "";
-                                                                            id(alert_title) = "设备当前离线";
-                                                                            id(alert_msg) = "该设备断电离线，请先检查物理开关";
-                                                                            id(alert_start_ms) = millis();
-                                                                            id(alert_dur_ms) = 1800;
-                                                                            id(alert_active) = true;
-                                                                          } else {
-                                                                            id(target_toggle_entity) = eids[idx];
-                                                                            id(dev_action_start_ms) = millis();
-                                                                            id(dev_action_active) = true;
-                                                                          }
-                                                                          id(m5display).update();
-                                                                      - if:
-                                                                          condition:
-                                                                            lambda: 'return !id(target_toggle_entity).empty();'
-                                                                          then:
-                                                                            - homeassistant.service:
-                                                                                service: homeassistant.toggle
-                                                                                data:
-                                                                                  entity_id: !lambda 'return id(target_toggle_entity);'
-                                                                    else:
-                                                                      - lambda: |-
-                                                                          bool is_up = (row == 5 && col == 6) || (row == 5 && col == 3);
-                                                                          int cur = id(dev_cursor);
-                                                                          if (is_up) {
-                                                                            cur = (cur + 4) % 5;
-                                                                          } else {
-                                                                            cur = (cur + 1) % 5;
-                                                                          }
-                                                                          id(dev_cursor) = cur;
-                                                                          if (cur < id(dev_scroll)) {
-                                                                            id(dev_scroll) = cur;
-                                                                          } else if (cur >= id(dev_scroll) + 3) {
-                                                                            id(dev_scroll) = cur - 2;
-                                                                          }
-                                                                          id(alert_active) = false;
-                                                                          id(m5display).update();
+                                                                # 录音途中再次按下按键：明确取消本次对话并退回待命
+                                                                - lambda: |-
+                                                                    id(va_state) = 0;
+                                                                    id(va_status_msg) = "Cancelled";
+                                                                    id(m5display).update();
+                                                                - voice_assistant.stop:
                                                               else:
-                                                                # ===== 其余按键：按当前状态处理（打断 / 停止录音 / 启动对讲）=====
-                                                                - if:
-                                                                    condition:
-                                                                      lambda: 'return id(va_state) == 3 || id(va_state) == 2;'
-                                                                    then:
-                                                                      - lambda: |-
-                                                                          id(echo_speaker)->stop();
-                                                                          id(va_state) = 0;
-                                                                          id(va_status_msg) = "Interrupted";
-                                                                          id(va_stt_text).clear();
-                                                                          id(va_reply_text).clear();
-                                                                          id(dialog_reset_active) = false;
-                                                                          id(m5display).update();
-                                                                      - voice_assistant.stop:
-                                                                    else:
-                                                                      - if:
-                                                                          condition:
-                                                                            lambda: 'return id(va_state) == 1;'
-                                                                          then:
-                                                                            # 录音途中再次按下按键：明确取消本次对话并退回待命
-                                                                            - lambda: |-
-                                                                                id(va_state) = 0;
-                                                                                id(va_status_msg) = "Cancelled";
-                                                                                id(m5display).update();
-                                                                            - voice_assistant.stop:
-                                                                          else:
-                                                                            # 开启语音对讲（支持点按说完停顿自动提交，或按住说完松手自动提交，松手绝不发 abort）
-                                                                            - lambda: |-
-                                                                                id(va_stt_text).clear();
-                                                                                id(va_reply_text).clear();
-                                                                                id(alert_active) = false;
-                                                                                id(dialog_reset_active) = false;
-                                                                            - voice_assistant.start:
-                                                                                silence_detection: true
+                                                                # 开启语音对讲（支持点按说完停顿自动提交，或按住说完松手自动提交）
+                                                                - lambda: |-
+                                                                    id(va_stt_text).clear();
+                                                                    id(va_reply_text).clear();
+                                                                    id(alert_active) = false;
+                                                                    id(dialog_reset_active) = false;
+                                                                - voice_assistant.start:
+                                                                    silence_detection: true
 
-# 官方内置 Bosch BMI270 6轴传感器驱动（自动加载 8KB 官方微码校准，地址 0x69，低功耗采样）
+# 官方内置 Bosch BMI270 6轴传感器驱动（自动加载 8KB 官方微码校准，地址 0x69）
 motion:
   - platform: bmi270
     id: cardputer_imu
     i2c_id: bus_internal
     address: 0x69
     accelerometer_range: 2G
-    accelerometer_odr: 25HZ
+    accelerometer_odr: 50HZ
     gyroscope_range: 125DPS
     gyroscope_odr: 25HZ
-    update_interval: 200ms
+    update_interval: 80ms
 
 spi:
   clk_pin: GPIO36
@@ -532,18 +522,20 @@ display:
   rotation: 90
   update_interval: 100ms
   lambda: |-
-    // 0. 自动节能管理 (仅在待命就绪状态下生效；息屏后直接跳过 SPI 刷屏省电)
+    // 0. 自动节能管理 (水平仪测量模式下自动延长至 3 分钟暗屏 / 5 分钟休眠)
     int st = id(va_state);
     if (st == 0) {
       if (id(is_sleeping)) {
         return;
       }
-      uint32_t idle = millis() - id(last_activity_ms);
-      if (idle > 120000) {
+      uint32_t idle = (uint32_t)(millis() - id(last_activity_ms));
+      uint32_t dim_limit = (id(ui_mode) == 4) ? 180000 : 30000;
+      uint32_t sleep_limit = (id(ui_mode) == 4) ? 300000 : 120000;
+      if (idle > sleep_limit) {
         id(is_sleeping) = true;
         id(disp_backlight)->turn_off().perform();
         return;
-      } else if (idle > 30000 && !id(is_dimmed)) {
+      } else if (idle > dim_limit && !id(is_dimmed)) {
         id(is_dimmed) = true;
         id(disp_backlight)->turn_on().set_brightness(0.15f).perform();
       }
@@ -891,6 +883,101 @@ display:
           it.filled_rectangle(232, 40, 3, 69, id(color_card));
           it.filled_rectangle(232, 40 + scr * 14, 3, 41, id(color_cyan));
 
+        } else if (id(ui_mode) == 4) {
+          // ===== Mode 4: BMI270 高精度双轴气泡电子水平仪 (平放圆靶 + 立边/铅垂管状尺自适应) =====
+          auto &imu = visualizer::imu_tracker;
+          bool zeroed = imu.zero_enabled;
+
+          if (imu.is_flat_mode()) {
+            // --- 形态 A：平放桌面 / 顶面贴靠 -> 双轴同心圆水准靶盘 ---
+            float roll = imu.get_roll_deg();
+            float pitch = imu.get_pitch_deg();
+            float tilt = std::sqrt(roll * roll + pitch * pitch);
+            bool is_lvl = (tilt <= 0.6f);
+            auto status_col = is_lvl ? id(color_green) : ((tilt <= 3.0f) ? id(color_cyan) : id(color_yellow));
+
+            // 左侧精确角度读数卡片 (X: 8, Y: 24, W: 122, H: 86)
+            it.filled_rectangle(8, 24, 122, 86, id(color_card));
+            it.rectangle(8, 24, 122, 86, id(color_card_border));
+            it.print(14, 27, id(font_cn), zeroed ? id(color_yellow) : id(color_cyan),
+                     zeroed ? "[双轴·相对零点]" : "[双轴水平仪]");
+
+            char rx_buf[28], py_buf[28];
+            snprintf(rx_buf, sizeof(rx_buf), "左右X: %+5.1f°", roll);
+            snprintf(py_buf, sizeof(py_buf), "前后Y: %+5.1f°", pitch);
+            it.print(14, 46, id(font_cn), id(color_white), rx_buf);
+            it.print(14, 65, id(font_cn), id(color_white), py_buf);
+
+            if (is_lvl) {
+              it.filled_rectangle(14, 87, 56, 16, id(color_green));
+              it.print(18, 86, id(font_cn), id(color_bg), "已水平");
+            } else {
+              it.rectangle(14, 87, 56, 16, status_col);
+              it.print(18, 86, id(font_cn), status_col, (tilt <= 3.0f) ? "微倾斜" : "未水平");
+            }
+            it.print(74, 87, id(font_cn), id(color_dim_gray), zeroed ? "回车复原" : "回车归零");
+
+            // 右侧双轴圆靶水准泡 (X: 134, Y: 24, W: 98, H: 86)
+            it.filled_rectangle(134, 24, 98, 86, id(color_card));
+            it.rectangle(134, 24, 98, 86, id(color_card_border));
+            int cx = 183, cy = 67;
+            it.line(cx - 37, cy, cx + 37, cy, id(color_card_border));
+            it.line(cx, cy - 37, cx, cy + 37, id(color_card_border));
+            it.circle(cx, cy, 37, id(color_gray));
+            it.circle(cx, cy, 20, id(color_card_border));
+            it.circle(cx, cy, 8, is_lvl ? id(color_green) : id(color_cyan));
+
+            // 模拟真实气泡物理方向：哪侧抬高，水准泡向哪侧浮起
+            float dx = -roll * 2.4f;
+            float dy = pitch * 2.4f;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist > 30.0f) {
+              dx = dx * 30.0f / dist;
+              dy = dy * 30.0f / dist;
+            }
+            int bx = cx + (int)std::round(dx);
+            int by = cy + (int)std::round(dy);
+            it.filled_circle(bx, by, 6, status_col);
+            it.filled_circle(bx - 2, by - 2, 1, id(color_white));
+
+          } else {
+            // --- 形态 B：竖立底边 / 侧边贴靠测量 -> 管状水准尺 / 铅垂尺 ---
+            float edge = imu.get_edge_deg();
+            float abs_e = std::abs(edge);
+            bool is_lvl = (abs_e <= 0.6f);
+            bool plumb = imu.is_plumb_mode();
+            auto status_col = is_lvl ? id(color_green) : ((abs_e <= 3.0f) ? id(color_cyan) : id(color_yellow));
+
+            it.filled_rectangle(8, 24, 224, 86, id(color_card));
+            it.rectangle(8, 24, 224, 86, id(color_card_border));
+
+            it.print(14, 28, id(font_cn), zeroed ? id(color_yellow) : id(color_cyan),
+                     plumb ? "[侧边铅垂尺]" : "[立边水平尺]");
+
+            char ang_buf[32];
+            snprintf(ang_buf, sizeof(ang_buf), "%+5.1f° %s", edge, is_lvl ? "[已水平]" : "[调整中]");
+            it.print(118, 28, id(font_cn), status_col, ang_buf);
+
+            // 横向仿真玻璃水准管 (X: 22 ~ 218, Y: 53, W: 196, H: 26)
+            it.filled_rectangle(22, 53, 196, 26, id(color_bg));
+            it.rectangle(22, 53, 196, 26, id(color_gray));
+            // 中央双基准刻度线与辅助刻度线
+            it.line(106, 53, 106, 79, is_lvl ? id(color_green) : id(color_cyan));
+            it.line(134, 53, 134, 79, is_lvl ? id(color_green) : id(color_cyan));
+            it.line(70, 58, 70, 74, id(color_card_border));
+            it.line(170, 58, 170, 74, id(color_card_border));
+
+            float shift = -edge * 4.5f;
+            if (shift < -84.0f) shift = -84.0f;
+            if (shift > 84.0f) shift = 84.0f;
+            int bx = 120 + (int)std::round(shift) - 11;
+            it.filled_rectangle(bx, 57, 22, 18, status_col);
+            it.filled_rectangle(bx + 3, 59, 6, 2, id(color_white));
+
+            it.print(14, 87, id(font_cn), id(color_gray), plumb ? "短边贴墙测垂直" : "长边贴物测水平");
+            it.print(138, 87, id(font_cn), id(color_dim_gray), zeroed ? "回车恢复基准" : "回车相对归零");
+          }
+
         } else {
           // ===== Mode 0: 赛博心跳脉冲呼吸线 (平滑连续折线) =====
           it.filled_rectangle(14, 26, 212, 82, id(color_card));
@@ -923,13 +1010,15 @@ display:
     snprintf(v_str, sizeof(v_str), "音量: %d%%", (int)(id(cardputer_vol) * 100.0f + 0.5f));
     it.print(115, 117, id(font_cn), id(color_yellow), v_str);
     if (id(ui_mode) == 1) {
-      it.print(175, 117, id(font_cn), id(color_green), "[2/4 副屏]");
+      it.print(175, 117, id(font_cn), id(color_green), "[2/5 副屏]");
     } else if (id(ui_mode) == 2) {
-      it.print(175, 117, id(font_cn), id(color_yellow), "[3/4 集群]");
+      it.print(175, 117, id(font_cn), id(color_yellow), "[3/5 集群]");
     } else if (id(ui_mode) == 3) {
-      it.print(175, 117, id(font_cn), id(color_cyan), "[4/4 控家]");
+      it.print(175, 117, id(font_cn), id(color_cyan), "[4/5 控家]");
+    } else if (id(ui_mode) == 4) {
+      it.print(175, 117, id(font_cn), id(color_green), "[5/5 水平]");
     } else {
-      it.print(175, 117, id(font_cn), id(color_cyan), "[1/4 语音]");
+      it.print(175, 117, id(font_cn), id(color_cyan), "[1/5 语音]");
     }
 
     // 5. 音量浮层 HUD (按 - / + 键时弹出，49.7天溢出安全)
