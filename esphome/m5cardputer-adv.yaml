@@ -19,6 +19,16 @@ esphome:
             );
             if (g == 1) {
               id(echo_speaker)->stop();
+              if (id(va_state) != 0) {
+                id(va_comp)->request_stop();
+                id(va_state) = 0;
+                id(va_status_msg) = "Ready";
+                id(va_stt_text).clear();
+                id(va_reply_text).clear();
+              }
+              id(dialog_reset_active) = false;
+              id(alert_active) = false;
+              id(vol_hud_active) = false;
               id(is_sleeping) = true;
               id(is_dimmed) = false;
               id(disp_backlight)->turn_off().perform();
@@ -46,7 +56,7 @@ external_components:
     components: [tca8418_keypad]
 
 logger:
-  level: DEBUG
+  level: INFO
 
 api:
   encryption:
@@ -60,7 +70,9 @@ api:
         - lambda: |-
             id(alert_title) = title;
             id(alert_msg) = message;
-            id(alert_timeout_ms) = millis() + 8000;
+            id(alert_start_ms) = millis();
+            id(alert_dur_ms) = 8000;
+            id(alert_active) = true;
             id(last_activity_ms) = millis();
             id(is_sleeping) = false;
             id(is_dimmed) = false;
@@ -116,12 +128,21 @@ globals:
     type: float
     initial_value: "0.75"
     restore_value: true
-  - id: vol_hud_timeout_ms
+  - id: vol_hud_start_ms
     type: uint32_t
     initial_value: "0"
-  - id: dialog_reset_timeout_ms
+  - id: vol_hud_active
+    type: bool
+    initial_value: "false"
+  - id: dialog_reset_start_ms
     type: uint32_t
     initial_value: "0"
+  - id: dialog_reset_dur_ms
+    type: uint32_t
+    initial_value: "5000"
+  - id: dialog_reset_active
+    type: bool
+    initial_value: "false"
   - id: batt_pct
     type: int
     initial_value: "100"
@@ -134,9 +155,6 @@ globals:
   - id: is_sleeping
     type: bool
     initial_value: "false"
-  - id: key_press_start_ms
-    type: uint32_t
-    initial_value: "0"
   - id: ui_mode
     type: int
     initial_value: "0" # 0: 语音脉冲, 1: 桌面副屏与备忘, 2: 集群算力雷达
@@ -146,9 +164,15 @@ globals:
   - id: alert_msg
     type: std::string
     initial_value: '""'
-  - id: alert_timeout_ms
+  - id: alert_start_ms
     type: uint32_t
     initial_value: "0"
+  - id: alert_dur_ms
+    type: uint32_t
+    initial_value: "8000"
+  - id: alert_active
+    type: bool
+    initial_value: "false"
 
 color:
   - id: color_bg
@@ -272,7 +296,8 @@ tca8418_keypad:
                           if (v < 0.20f) v = 0.20f;
                           id(cardputer_vol) = v;
                           id(cardputer_adv_dac)->set_volume(v);
-                          id(vol_hud_timeout_ms) = millis() + 2000;
+                          id(vol_hud_start_ms) = millis();
+                          id(vol_hud_active) = true;
                           id(m5display).update();
                     else:
                       - if:
@@ -285,7 +310,8 @@ tca8418_keypad:
                                 if (v > 1.0f) v = 1.0f;
                                 id(cardputer_vol) = v;
                                 id(cardputer_adv_dac)->set_volume(v);
-                                id(vol_hud_timeout_ms) = millis() + 2000;
+                                id(vol_hud_start_ms) = millis();
+                                id(vol_hud_active) = true;
                                 id(m5display).update();
                           else:
                             # ===== 最高优先级 3：切换待机桌面视图 (左侧第一列 ESC/TAB/Fn/Ctrl: row==0, col<=3) =====
@@ -305,8 +331,8 @@ tca8418_keypad:
                                       id(va_status_msg) = "Ready";
                                       id(va_stt_text).clear();
                                       id(va_reply_text).clear();
-                                      id(alert_timeout_ms) = 0;
-                                      id(dialog_reset_timeout_ms) = 0;
+                                      id(alert_active) = false;
+                                      id(dialog_reset_active) = false;
                                       id(ui_mode) = (id(ui_mode) + 1) % 3;
                                       id(m5display).update();
                                 else:
@@ -322,7 +348,9 @@ tca8418_keypad:
                                         - lambda: |-
                                             id(alert_title) = "物理宏 [1]";
                                             id(alert_msg) = "已下发一键全屋熄灯指令";
-                                            id(alert_timeout_ms) = millis() + 2500;
+                                            id(alert_start_ms) = millis();
+                                            id(alert_dur_ms) = 2500;
+                                            id(alert_active) = true;
                                             id(m5display).update();
                                       else:
                                         # ===== 物理宏键 2 (row=1, col=0)：一键专注息屏静音 =====
@@ -343,7 +371,7 @@ tca8418_keypad:
                                                   then:
                                                     - lambda: |-
                                                         id(ui_mode) = 2;
-                                                        id(alert_timeout_ms) = 0;
+                                                        id(alert_active) = false;
                                                         id(m5display).update();
                                                   else:
                                                     # ===== 其余按键：按当前状态处理（打断 / 停止录音 / 启动对讲）=====
@@ -357,7 +385,7 @@ tca8418_keypad:
                                                               id(va_status_msg) = "Interrupted";
                                                               id(va_stt_text).clear();
                                                               id(va_reply_text).clear();
-                                                              id(dialog_reset_timeout_ms) = 0;
+                                                              id(dialog_reset_active) = false;
                                                               id(m5display).update();
                                                           - voice_assistant.stop:
                                                         else:
@@ -376,19 +404,21 @@ tca8418_keypad:
                                                                 - lambda: |-
                                                                     id(va_stt_text).clear();
                                                                     id(va_reply_text).clear();
-                                                                    id(alert_timeout_ms) = 0;
-                                                                    id(dialog_reset_timeout_ms) = 0;
+                                                                    id(alert_active) = false;
+                                                                    id(dialog_reset_active) = false;
                                                                 - voice_assistant.start:
                                                                     silence_detection: true
 
-# 官方内置 Bosch BMI270 6轴传感器驱动（自动加载 8KB 官方微码校准，地址 0x69）
+# 官方内置 Bosch BMI270 6轴传感器驱动（自动加载 8KB 官方微码校准，地址 0x69，低功耗采样）
 motion:
   - platform: bmi270
     id: cardputer_imu
     i2c_id: bus_internal
     address: 0x69
     accelerometer_range: 2G
-    accelerometer_odr: 50HZ
+    accelerometer_odr: 25HZ
+    gyroscope_range: 125DPS
+    gyroscope_odr: 25HZ
     update_interval: 200ms
 
 spi:
@@ -505,8 +535,7 @@ display:
       if (!id(va_stt_text).empty()) {
         it.filled_rectangle(10, 44, 220, 26, id(color_card));
         it.rectangle(10, 44, 220, 26, id(color_card_border));
-        std::string txt = "你: " + id(va_stt_text);
-        if (txt.size() > 36) txt = txt.substr(0, 33) + "...";
+        std::string txt = visualizer::truncate_utf8("你: " + id(va_stt_text), 33);
         it.print(16, 49, id(font_cn), id(color_white), txt.c_str());
       } else {
         it.print(30, 49, id(font_cn), id(color_gray), "SenseVoice 极速识别中...");
@@ -543,11 +572,11 @@ display:
       // ===== 就绪状态 (READY / 4 ERROR) =====
       visualizer::update_bars(false);
 
-      if (id(dialog_reset_timeout_ms) > 0 && millis() >= id(dialog_reset_timeout_ms)) {
+      if (id(dialog_reset_active) && (uint32_t)(millis() - id(dialog_reset_start_ms)) >= id(dialog_reset_dur_ms)) {
         id(va_stt_text).clear();
         id(va_reply_text).clear();
         id(va_state) = 0;
-        id(dialog_reset_timeout_ms) = 0;
+        id(dialog_reset_active) = false;
       }
 
       if (!id(va_stt_text).empty() && !id(va_reply_text).empty()) {
@@ -567,12 +596,15 @@ display:
           it.print(14, 76, id(font_cn), id(color_green), a2.c_str());
         }
 
-        // 倒计时指示微条 (青色逐渐缩短)
-        if (id(dialog_reset_timeout_ms) > millis()) {
-          uint32_t rem = id(dialog_reset_timeout_ms) - millis();
-          int w = (int)(224 * rem / 5000);
-          if (w > 224) w = 224;
-          if (w > 0) it.filled_rectangle(8, 110, w, 2, id(color_cyan));
+        // 倒计时指示微条 (青色逐渐缩短，49.7天无符号差值安全)
+        if (id(dialog_reset_active)) {
+          uint32_t elapsed = (uint32_t)(millis() - id(dialog_reset_start_ms));
+          if (elapsed < id(dialog_reset_dur_ms)) {
+            uint32_t rem = id(dialog_reset_dur_ms) - elapsed;
+            int w = (int)(224 * rem / id(dialog_reset_dur_ms));
+            if (w > 224) w = 224;
+            if (w > 0) it.filled_rectangle(8, 110, w, 2, id(color_cyan));
+          }
         }
       } else {
         if (id(ui_mode) == 1) {
@@ -634,8 +666,8 @@ display:
           it.print(134, 88, id(font_cn), id(color_gray), w_buf);
 
         } else if (id(ui_mode) == 2) {
-          // ===== Mode 2: 掌上 nuctutu 集群算力指挥台 + 终端真实硬件雷达 =====
-          // 左侧：nuctutu 小模型集群实时算力 (X: 8, Y: 24, W: 122, H: 86)
+          // ===== Mode 2: 掌上边缘集群算力指挥台 + 终端真实硬件雷达 =====
+          // 左侧：边缘小模型集群实时算力 (X: 8, Y: 24, W: 122, H: 86)
           it.filled_rectangle(8, 24, 122, 86, id(color_card));
           it.rectangle(8, 24, 122, 86, id(color_card_border));
           it.print(14, 28, id(font_cn), id(color_cyan), "[本地算力集群]");
@@ -664,7 +696,7 @@ display:
 
           std::string mdl = id(ha_legion_model).state;
           if (mdl.empty() || mdl == "unknown" || mdl == "unavailable") mdl = "Qwen3-4B";
-          if (mdl.size() > 14) mdl = mdl.substr(0, 14);
+          mdl = visualizer::truncate_utf8(mdl, 14, false);
           it.print(14, 86, id(font_cn), id(color_yellow), mdl.c_str());
 
           // 右侧：Cardputer 真实硬件与射频波动 (X: 134, Y: 24, W: 98, H: 86)
@@ -698,7 +730,7 @@ display:
           // ===== Mode 0: 赛博心跳脉冲呼吸线 (平滑连续折线) =====
           it.filled_rectangle(14, 26, 212, 82, id(color_card));
           it.rectangle(14, 26, 212, 82, id(color_card_border));
-          it.print(32, 33, id(font_cn), id(color_white), "按任意键对讲 / 长按说话");
+          it.print(32, 33, id(font_cn), id(color_white), "点按对讲 / 说完自动提交");
           it.print(26, 52, id(font_cn), id(color_dim_gray), "-/+ 调音量   ESC/TAB 切屏");
 
           int baseline_y = 83;
@@ -733,28 +765,36 @@ display:
       it.print(175, 117, id(font_cn), id(color_cyan), "[1/3 语音]");
     }
 
-    // 5. 音量浮层 HUD (按 - / + 键时弹出)
-    if (millis() < id(vol_hud_timeout_ms)) {
-      it.filled_rectangle(35, 40, 170, 48, id(color_card));
-      it.rectangle(35, 40, 170, 48, id(color_cyan));
-      int vol_pct = (int)(id(cardputer_vol) * 100.0f + 0.5f);
-      char hud_buf[32];
-      snprintf(hud_buf, sizeof(hud_buf), "扬声器音量: %d%%", vol_pct);
-      it.print(48, 46, id(font_cn), id(color_white), hud_buf);
-      it.filled_rectangle(50, 68, 140, 8, id(color_bg));
-      it.filled_rectangle(50, 68, (int)(140 * id(cardputer_vol)), 8, id(color_cyan));
+    // 5. 音量浮层 HUD (按 - / + 键时弹出，49.7天溢出安全)
+    if (id(vol_hud_active)) {
+      if ((uint32_t)(millis() - id(vol_hud_start_ms)) < 2000) {
+        it.filled_rectangle(35, 40, 170, 48, id(color_card));
+        it.rectangle(35, 40, 170, 48, id(color_cyan));
+        int vol_pct = (int)(id(cardputer_vol) * 100.0f + 0.5f);
+        char hud_buf[32];
+        snprintf(hud_buf, sizeof(hud_buf), "扬声器音量: %d%%", vol_pct);
+        it.print(48, 46, id(font_cn), id(color_white), hud_buf);
+        it.filled_rectangle(50, 68, 140, 8, id(color_bg));
+        it.filled_rectangle(50, 68, (int)(140 * id(cardputer_vol)), 8, id(color_cyan));
+      } else {
+        id(vol_hud_active) = false;
+      }
     }
     // 6. 反向主动唤醒警报 / 宏操作弹窗 HUD
-    if (millis() < id(alert_timeout_ms)) {
-      it.filled_rectangle(14, 28, 212, 76, id(color_card));
-      it.rectangle(14, 28, 212, 76, id(color_yellow));
-      it.filled_rectangle(14, 28, 212, 20, id(color_yellow));
-      it.print(22, 31, id(font_cn), id(color_bg), id(alert_title).c_str());
-      std::string al1, al2;
-      visualizer::split_cn_text(id(alert_msg), al1, al2, 32);
-      it.print(22, 54, id(font_cn), id(color_white), al1.c_str());
-      if (!al2.empty()) {
-        it.print(22, 74, id(font_cn), id(color_cyan), al2.c_str());
+    if (id(alert_active)) {
+      if ((uint32_t)(millis() - id(alert_start_ms)) < id(alert_dur_ms)) {
+        it.filled_rectangle(14, 28, 212, 76, id(color_card));
+        it.rectangle(14, 28, 212, 76, id(color_yellow));
+        it.filled_rectangle(14, 28, 212, 20, id(color_yellow));
+        it.print(22, 31, id(font_cn), id(color_bg), id(alert_title).c_str());
+        std::string al1, al2;
+        visualizer::split_cn_text(id(alert_msg), al1, al2, 32);
+        it.print(22, 54, id(font_cn), id(color_white), al1.c_str());
+        if (!al2.empty()) {
+          it.print(22, 74, id(font_cn), id(color_cyan), al2.c_str());
+        }
+      } else {
+        id(alert_active) = false;
       }
     }
 
@@ -771,7 +811,7 @@ voice_assistant:
     - lambda: |-
         id(va_state) = 1;
         id(va_status_msg) = "Listening";
-        id(dialog_reset_timeout_ms) = 0;
+        id(dialog_reset_active) = false;
   on_listening:
     - lambda: |-
         id(va_state) = 1;
@@ -790,12 +830,16 @@ voice_assistant:
   on_end:
     - lambda: |-
         id(va_state) = 0;
-        id(dialog_reset_timeout_ms) = millis() + 5000;
+        id(dialog_reset_start_ms) = millis();
+        id(dialog_reset_dur_ms) = 5000;
+        id(dialog_reset_active) = true;
   on_error:
     - lambda: |-
         id(va_state) = 4;
         id(va_status_msg) = "Error";
-        id(dialog_reset_timeout_ms) = millis() + 3000;
+        id(dialog_reset_start_ms) = millis();
+        id(dialog_reset_dur_ms) = 3000;
+        id(dialog_reset_active) = true;
 
 output:
   - platform: ledc
@@ -880,5 +924,6 @@ number:
       - lambda: |-
           id(cardputer_vol) = x;
           id(cardputer_adv_dac)->set_volume(x);
-          id(vol_hud_timeout_ms) = millis() + 2000;
+          id(vol_hud_start_ms) = millis();
+          id(vol_hud_active) = true;
           id(m5display).update();

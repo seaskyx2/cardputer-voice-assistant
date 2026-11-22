@@ -9,9 +9,9 @@ import threading
 import psutil
 import httpx
 from datetime import datetime, timedelta, date, timezone
-from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from typing import List, Optional, Dict, Any, Tuple
+from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 # ── 加载本地 .env（无第三方依赖） ──────────────────────────────────────────────
@@ -40,92 +40,235 @@ DASHBOARD_DIR = os.getenv("DASHBOARD_DIR", os.path.join(BASE_DIR, "dashboard"))
 OLLAMA_URL = os.getenv("OLLAMA_URL", "").rstrip("/")  # 若配置则走外部 Ollama；留空则使用本机 llama_cpp 直载 GGUF
 PORT = int(os.getenv("PORT", "8096"))
 N_THREADS = int(os.getenv("LLM_THREADS", "4"))
+HOST_NAME = os.getenv("HOST_NAME", "").strip() or socket.gethostname()
+HOST_LABEL = os.getenv("HOST_LABEL", "").strip() or f"{HOST_NAME} ({psutil.cpu_count(logical=False) or 4}C{psutil.cpu_count(logical=True) or 8}T)"
+LEGION_API_TOKEN = os.getenv("LEGION_API_TOKEN", "").strip()  # 可选：配置后对控制塔敏感写接口启用 Bearer/Header 校验
 
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "memory.db")
 
-app = FastAPI(title="AI Legion v2.0 · 端侧小模型集群控制塔")
+app = FastAPI(title="AI Legion v2.3 · 端侧小模型集群控制塔")
 
-# ── SQLite 离线家庭第二大脑（记忆与待办） ────────────────────────────────────────
+def verify_optional_token(request: Request):
+    """可选局域网写接口防护：若 .env 配置了 LEGION_API_TOKEN 则强制校验，未配置则默认放行"""
+    if not LEGION_API_TOKEN:
+        return
+    client_host = request.client.host if request.client else ""
+    if client_host in ("127.0.0.1", "::1", "localhost"):
+        return
+    auth = request.headers.get("Authorization", "")
+    x_tok = request.headers.get("X-Legion-Token", "")
+    if auth == f"Bearer {LEGION_API_TOKEN}" or x_tok == LEGION_API_TOKEN:
+        return
+    raise HTTPException(status_code=401, detail="Invalid or missing LEGION_API_TOKEN")
+
+# ── 语音识别领域同音热词纠偏 ──────────────────────────────────────────────────
+HOMOPHONE_FIXES = (
+    ("随手机", "随手记"),
+    ("随手计", "随手记"),
+    ("备忘路", "备忘录"),
+    ("被忘录", "备忘录"),
+    ("代办", "待办"),
+    ("吸顶等", "吸顶灯"),
+)
+
+def normalize_voice_text(text: str) -> str:
+    for wrong, right in HOMOPHONE_FIXES:
+        if wrong in text:
+            text = text.replace(wrong, right)
+    return text
+
+# ── SQLite 离线家庭第二大脑（记忆与待办 · WAL 并发安全） ─────────────────────────
 CN_WEEKDAY_MAP = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
 CN_WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
+def parse_cn_int(s: str) -> Optional[int]:
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s)
+    digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if s == "十":
+        return 10
+    if s.startswith("十") and len(s) == 2 and s[1] in digits:
+        return 10 + digits[s[1]]
+    if s.endswith("十") and len(s) == 2 and s[0] in digits:
+        return digits[s[0]] * 10
+    if "十" in s and len(s) == 3:
+        p = s.split("十")
+        if p[0] in digits and p[1] in digits:
+            return digits[p[0]] * 10 + digits[p[1]]
+    if len(s) == 1 and s in digits:
+        return digits[s]
+    return None
+
+def get_db_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    return conn
+
 def resolve_relative_date(text: str, base_dt: datetime = None) -> Optional[str]:
-    """将口语相对日期（今天/明天/这个星期天/下周三/X月X日）锚定为绝对 YYYY-MM-DD"""
+    """将口语相对日期（今天/明天/周末/三天后/下周三/下个月五号/X月X日）锚定为绝对 YYYY-MM-DD"""
     now = base_dt or datetime.now()
     today = now.date()
-    # 1. 绝对月日：X月X日/号
-    m_md = re.search(r"(\d{1,2})月(\d{1,2})[日号]?", text)
+
+    # 1. 绝对月日：X月X日/号（支持中文数字或阿拉伯数字）
+    m_md = re.search(r"([0-9一二三四五六七八九十]{1,3})月([0-9一二三四五六七八九十]{1,3})[日号]?", text)
     if m_md:
-        mo, dy = int(m_md.group(1)), int(m_md.group(2))
-        try:
-            cand = date(today.year, mo, dy)
-            if cand < today - timedelta(days=30):
-                cand = date(today.year + 1, mo, dy)
-            return cand.strftime("%Y-%m-%d")
-        except Exception:
-            pass
-    # 2. 今天 / 明天 / 后天 / 大后天
+        mo = parse_cn_int(m_md.group(1))
+        dy = parse_cn_int(m_md.group(2))
+        if mo and dy:
+            try:
+                cand = date(today.year, mo, dy)
+                if cand < today - timedelta(days=30):
+                    cand = date(today.year + 1, mo, dy)
+                return cand.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+
+    # 2. 下个月X号 / 本月X号
+    m_nmd = re.search(r"(这个月|本月|下个月|下月)([0-9一二三四五六七八九十]{1,3})[日号]?", text)
+    if m_nmd:
+        dy = parse_cn_int(m_nmd.group(2))
+        if dy:
+            yr, mo = today.year, today.month
+            if "下" in m_nmd.group(1):
+                mo += 1
+                if mo > 12:
+                    mo = 1
+                    yr += 1
+            try:
+                return date(yr, mo, dy).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+
+    # 3. X天后 / X周后
+    m_after_d = re.search(r"([0-9一二两三四五六七八九十]{1,3})\s*天(?:后|之后|以后)", text)
+    if m_after_d:
+        n = parse_cn_int(m_after_d.group(1))
+        if n is not None:
+            return (today + timedelta(days=n)).strftime("%Y-%m-%d")
+
+    m_after_w = re.search(r"([0-9一二两三四五六七八九十]{1,2})\s*(?:周|个?星期|个?礼拜)(?:后|之后|以后)", text)
+    if m_after_w:
+        n = parse_cn_int(m_after_w.group(1))
+        if n is not None:
+            return (today + timedelta(days=n * 7)).strftime("%Y-%m-%d")
+
+    # 4. 大后天 / 后天 / 明天 / 今天
     if "大后天" in text:
         return (today + timedelta(days=3)).strftime("%Y-%m-%d")
     if "后天" in text:
         return (today + timedelta(days=2)).strftime("%Y-%m-%d")
-    if "明天" in text or "明日" in text:
+    if "明天" in text or "明日" in text or "明早" in text or "明晚" in text:
         return (today + timedelta(days=1)).strftime("%Y-%m-%d")
-    if "今天" in text or "今晚" in text or "今日" in text:
+    if "今天" in text or "今晚" in text or "今日" in text or "今早" in text:
         return today.strftime("%Y-%m-%d")
-    # 3. 本周/这周/这个星期 + X  或  下周/下个星期 + X
+
+    # 5. 周末 / 这周末 / 下周末（锚定至对应周六；若今天已是周日且说“这周末”，则锚定今天周日）
+    monday = today - timedelta(days=today.weekday())
+    if "下周末" in text or "下个周末" in text:
+        return (monday + timedelta(days=12)).strftime("%Y-%m-%d")
+    if "周末" in text:
+        sat = monday + timedelta(days=5)
+        if today.weekday() == 6:
+            return today.strftime("%Y-%m-%d")
+        return sat.strftime("%Y-%m-%d")
+
+    # 6. 本周/这周/下周 + 星期X
     m_wk = re.search(r"(这周|本周|这个星期|这星期|下周|下个星期|下星期)?(?:星期|周|礼拜)([一二三四五六日天])", text)
     if m_wk:
         prefix = m_wk.group(1) or ""
         target_wd = CN_WEEKDAY_MAP[m_wk.group(2)]
-        monday = today - timedelta(days=today.weekday())
         if "下" in prefix:
             target = monday + timedelta(days=7 + target_wd)
         elif any(p in prefix for p in ("这", "本")):
             target = monday + timedelta(days=target_wd)
         else:
-            # 无前缀（如只说“周日”），取今天起最近的那个周X
             diff = (target_wd - today.weekday()) % 7
             target = today + timedelta(days=diff)
         return target.strftime("%Y-%m-%d")
-    # 4. 泛指“这周 / 本周 / 下周”（未指定周几，锚定到该周周日作为截止参考）
+
+    # 7. 泛指“这周 / 本周 / 下周”
     if any(w in text for w in ("下周", "下星期", "下个星期")):
-        monday = today - timedelta(days=today.weekday())
         return (monday + timedelta(days=13)).strftime("%Y-%m-%d")
     if any(w in text for w in ("这周", "本周", "这星期", "这个星期")):
-        monday = today - timedelta(days=today.weekday())
         return (monday + timedelta(days=6)).strftime("%Y-%m-%d")
     return None
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS memories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT NOT NULL DEFAULT '随手记',
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            event_date TEXT DEFAULT NULL
-        )
-    """)
-    # 兼容旧库自动迁移增加 event_date 列，并回溯补全历史记录的绝对日期
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(memories)").fetchall()]
-    if "event_date" not in cols:
-        conn.execute("ALTER TABLE memories ADD COLUMN event_date TEXT DEFAULT NULL")
-    rows = conn.execute("SELECT id, content, created_at, event_date FROM memories WHERE event_date IS NULL").fetchall()
-    for mid, content, created_at, _ in rows:
-        try:
-            base = datetime.strptime(created_at[:16], "%Y-%m-%d %H:%M")
-        except Exception:
-            base = datetime.now()
-        ev = resolve_relative_date(content, base)
-        if ev:
-            conn.execute("UPDATE memories SET event_date = ?, category = '待办提醒' WHERE id = ?", (ev, mid))
-    conn.commit()
-    conn.close()
+    with get_db_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL DEFAULT '随手记',
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                event_date TEXT DEFAULT NULL
+            )
+        """)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(memories)").fetchall()]
+        if "event_date" not in cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN event_date TEXT DEFAULT NULL")
+        rows = conn.execute("SELECT id, content, created_at, event_date FROM memories WHERE event_date IS NULL").fetchall()
+        for r in rows:
+            try:
+                base = datetime.strptime(r["created_at"][:16], "%Y-%m-%d %H:%M")
+            except Exception:
+                base = datetime.now()
+            ev = resolve_relative_date(r["content"], base)
+            if ev:
+                conn.execute("UPDATE memories SET event_date = ?, category = '待办提醒' WHERE id = ?", (ev, r["id"]))
+        conn.commit()
 
 init_db()
+
+def list_memories(limit: int = 30) -> List[Dict[str, Any]]:
+    with get_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, category, content, created_at, event_date FROM memories ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+def get_best_memo_for_screen() -> str:
+    """为 Cardputer 桌面副屏挑选最高价值的一条备忘：优先展示最近未过期的日程待办"""
+    today = datetime.now().date()
+    today_str = today.strftime("%Y-%m-%d")
+    with get_db_conn() as conn:
+        upcoming = conn.execute(
+            "SELECT content, event_date FROM memories WHERE event_date IS NOT NULL AND event_date >= ? ORDER BY event_date ASC, id DESC LIMIT 1",
+            (today_str,),
+        ).fetchone()
+        if upcoming:
+            ev = upcoming["event_date"]
+            txt = upcoming["content"]
+            try:
+                ev_d = datetime.strptime(ev, "%Y-%m-%d").date()
+                delta = (ev_d - today).days
+                if delta == 0:
+                    prefix = "今日:"
+                elif delta == 1:
+                    prefix = "明日:"
+                else:
+                    prefix = f"{ev_d.month}/{ev_d.day}:"
+                return f"{prefix}{txt}"[:30]
+            except Exception:
+                return txt[:28]
+
+        latest_note = conn.execute(
+            "SELECT content FROM memories WHERE event_date IS NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if latest_note:
+            return latest_note["content"][:28]
+    return "暂无待办备忘"
+
+def sync_memo_sensor_async():
+    def _push():
+        push_ha_sensor("sensor.ai_legion_memo", get_best_memo_for_screen(), "AI Legion Latest Memo")
+    threading.Thread(target=_push, daemon=True).start()
 
 def add_memory(content: str, category: str = "随手记", event_date: str = None) -> Dict[str, Any]:
     now = datetime.now()
@@ -133,34 +276,56 @@ def add_memory(content: str, category: str = "随手记", event_date: str = None
     ev = event_date or resolve_relative_date(content, now)
     if ev and category == "随手记":
         category = "待办提醒"
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO memories (category, content, created_at, event_date) VALUES (?, ?, ?, ?)",
-        (category, content.strip(), now_str, ev),
-    )
-    mid = cur.lastrowid
-    conn.commit()
-    conn.close()
+    with get_db_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO memories (category, content, created_at, event_date) VALUES (?, ?, ?, ?)",
+            (category, content.strip(), now_str, ev),
+        )
+        mid = cur.lastrowid
+        conn.commit()
+    sync_memo_sensor_async()
     return {"id": mid, "category": category, "content": content.strip(), "created_at": now_str, "event_date": ev}
 
-def list_memories(limit: int = 30) -> List[Dict[str, Any]]:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, category, content, created_at, event_date FROM memories ORDER BY id DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
 def delete_memory(mid: int) -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
-    conn.commit()
-    deleted = cur.rowcount > 0
-    conn.close()
+    with get_db_conn() as conn:
+        cur = conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
+        conn.commit()
+        deleted = cur.rowcount > 0
+    if deleted:
+        sync_memo_sensor_async()
     return deleted
+
+def delete_memory_by_voice_keyword(query: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """根据语音口令中的关键词匹配并删除对应随手记/待办"""
+    all_mems = list_memories(100)
+    if not all_mems:
+        return False, None
+    # 剥离删除操作套话，提取核心事项词
+    core = re.sub(
+        r"(请|帮我|把|那个|那条|关于|的|备忘录?|随手记|待办|提醒|记录|日程|事项|事儿?|给?删掉|删除|移除|取消|清掉|清除|销掉|已经|办完了?|做完了?|干完了?|搞定了?|完成了?|装好了?|弄好了?|吧|了|啊|呢|[，,。！!？?\s])",
+        "",
+        query,
+    )
+    if not core:
+        return False, None
+    tokens = [t for t in re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]{1,2}", core) if t]
+    best_score = 0
+    best_item = None
+    for m in all_mems:
+        score = 0
+        txt = m["content"]
+        if core in txt:
+            score += 12
+        for tk in tokens:
+            if tk in txt:
+                score += len(tk) * 2
+        if score > best_score:
+            best_score = score
+            best_item = m
+    if best_item and best_score >= 2:
+        ok = delete_memory(best_item["id"])
+        return ok, best_item
+    return False, None
 
 def format_memory_for_llm(m: Dict[str, Any], today: date) -> str:
     ev = m.get("event_date")
@@ -177,28 +342,57 @@ def format_memory_for_llm(m: Dict[str, Any], today: date) -> str:
                 status = "明天"
             else:
                 status = f"还有{delta}天"
-            return f"- [绝对日期: {ev} {wd} ({status}) | 分类: {m['category']} | 记录于: {m['created_at']}] {m['content']}"
+            return f"- [日程日期: {ev} {wd} ({status}) | 分类: {m['category']}] {m['content']}"
         except Exception:
             pass
-    return f"- [无指定日期 | 分类: {m['category']} | 记录于: {m['created_at']}] {m['content']}"
+    return f"- [长期随手记/无特定日期 | 分类: {m['category']}] {m['content']}"
+
+def build_grounding_memories_snippet(limit: int = 8) -> str:
+    """为所有对话提供精简、真实的本地随手记锚点，彻底杜绝小模型凭空瞎编用户日程"""
+    mems = list_memories(limit)
+    if not mems:
+        return "（当前本地随手记为空，用户没有任何已登记的待办、活动或备忘）"
+    today = datetime.now().date()
+    return "\n".join([format_memory_for_llm(m, today) for m in mems])
 
 def search_memories(query: str, top_k: int = 6) -> Dict[str, Any]:
-    """支持时间窗口精确过滤（今天/明天/这周/下周/最近）+ 关键词打分召回"""
+    """支持时间窗口精确过滤（今天/明天/后天/周末/这周/下周/近期）+ 关键词核验"""
     all_mems = list_memories(100)
     today = datetime.now().date()
     monday = today - timedelta(days=today.weekday())
     sunday = monday + timedelta(days=6)
 
-    # 判断用户是否在问特定时间窗口的日程
+    # 若用户在核验特定事实（如“我有说过今天要跟妈妈吃饭吗？”、“看下我随手记的内容”），直接返回全量有效记录供精确比对
+    is_fact_check = any(w in query for w in ("有说过", "说过", "记过", "随手记的内容", "所有备忘", "全部备忘", "有哪些备忘"))
+    if is_fact_check:
+        return {"mode": "fact_check", "window_label": "全部本地随手记", "items": all_mems[:max(top_k, 10)]}
+
     window_label = None
     win_start, win_end = None, None
-    if any(w in query for w in ("今天", "今日", "今晚")):
+    if any(w in query for w in ("今天", "今日", "今晚", "今早")):
         window_label = f"今天({today.strftime('%Y-%m-%d')})"
         win_start, win_end = today, today
-    elif any(w in query for w in ("明天", "明日")):
+    elif "大后天" in query:
+        d3 = today + timedelta(days=3)
+        window_label = f"大后天({d3.strftime('%Y-%m-%d')})"
+        win_start, win_end = d3, d3
+    elif "后天" in query:
+        d2 = today + timedelta(days=2)
+        window_label = f"后天({d2.strftime('%Y-%m-%d')})"
+        win_start, win_end = d2, d2
+    elif any(w in query for w in ("明天", "明日", "明早", "明晚")):
         tmr = today + timedelta(days=1)
         window_label = f"明天({tmr.strftime('%Y-%m-%d')})"
         win_start, win_end = tmr, tmr
+    elif "下周末" in query or "下个周末" in query:
+        nsat = monday + timedelta(days=12)
+        nsun = monday + timedelta(days=13)
+        window_label = f"下周末({nsat.strftime('%m-%d')}至{nsun.strftime('%m-%d')})"
+        win_start, win_end = nsat, nsun
+    elif "周末" in query:
+        sat = monday + timedelta(days=5)
+        window_label = f"本周末({sat.strftime('%m-%d')}至{sunday.strftime('%m-%d')})"
+        win_start, win_end = sat, sunday
     elif any(w in query for w in ("这周", "本周", "这星期", "这个星期")):
         window_label = f"本周({monday.strftime('%m-%d')}至{sunday.strftime('%m-%d')})"
         win_start, win_end = monday, sunday
@@ -207,7 +401,7 @@ def search_memories(query: str, top_k: int = 6) -> Dict[str, Any]:
         ns = nm + timedelta(days=6)
         window_label = f"下周({nm.strftime('%m-%d')}至{ns.strftime('%m-%d')})"
         win_start, win_end = nm, ns
-    elif any(w in query for w in ("最近", "近期", "接下来", "待办", "日程", "安排", "要做的事", "什么事")):
+    elif any(w in query for w in ("最近", "近期", "接下来", "待办", "日程", "安排", "要做的事", "什么事", "什么活", "活动")):
         window_label = f"近期({today.strftime('%m-%d')}起14天内)"
         win_start, win_end = today, today + timedelta(days=14)
 
@@ -224,8 +418,7 @@ def search_memories(query: str, top_k: int = 6) -> Dict[str, Any]:
                     pass
         return {"mode": "time_window", "window_label": window_label, "items": in_window[:top_k]}
 
-    # 否则按关键词检索（排除过期日程干扰，保留所有物品位置/随手记）
-    clean_q = re.sub(r"[我的你在哪了呢吗呀啊？?！!，,。.请问帮查一下之前记过备忘]", "", query)
+    clean_q = re.sub(r"[我的你在哪了呢吗呀啊？?！!，,。.请问帮查一下之前记过备忘随手记]", "", query)
     tokens = [t for t in re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]{1,2}", clean_q) if t]
     scored = []
     for m in all_mems:
@@ -239,7 +432,7 @@ def search_memories(query: str, top_k: int = 6) -> Dict[str, Any]:
         if score > 0:
             scored.append((score, m))
     scored.sort(key=lambda x: (-x[0], -x[1]["id"]))
-    items = [x[1] for x in scored[:top_k]] if scored else all_mems[:min(4, len(all_mems))]
+    items = [x[1] for x in scored[:top_k]] if scored else all_mems[:min(5, len(all_mems))]
     return {"mode": "keyword", "window_label": None, "items": items}
 
 # ── 真实模型注册表（只扫描磁盘真实存在的 GGUF） ─────────────────────────────────
@@ -279,10 +472,10 @@ LLM_LOCK = threading.Lock()
 ACTIVE_PRIMARY_ID = "qwen3-4b"
 TELEMETRY_LOGS: List[Dict[str, Any]] = []
 PENDING_TIMERS: List[Dict[str, Any]] = []
+TIMERS_LOCK = threading.Lock()
 
 def get_default_primary_id() -> str:
     global ACTIVE_PRIMARY_ID
-    # 优先使用已存在磁盘的 qwen3-4b，否则降级到 phi-4-mini
     if os.path.exists(os.path.join(MODELS_DIR, MODEL_CATALOG[ACTIVE_PRIMARY_ID]["filename"])):
         return ACTIVE_PRIMARY_ID
     for mid, meta in MODEL_CATALOG.items():
@@ -354,7 +547,7 @@ def record_telemetry(source: str, model_id: str, task_name: str, input_text: str
     MODEL_STATS[model_id]["last_active"] = entry["timestamp"]
     MODEL_STATS[model_id]["last_latency_ms"] = entry["latency_ms"]
 
-# ── 实时端口探活（Whisper / Piper / HA） ───────────────────────────────────────
+# ── 实时端口探活（SenseVoice / Whisper / Piper / HA） ──────────────────────────
 def check_tcp_port(host: str, port: int, timeout: float = 0.4) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -396,7 +589,7 @@ def get_real_pipeline_services() -> List[Dict[str, Any]]:
         })
     return out
 
-# ── Home Assistant 实体缓存与服务调用 ──────────────────────────────────────────
+# ── Home Assistant 实体缓存、设备别名清洗与极速匹配 ────────────────────────────
 HA_CACHE = {"ts": 0.0, "states": []}
 
 def get_ha_states_cached(force: bool = False) -> List[Dict[str, Any]]:
@@ -430,6 +623,60 @@ def get_controllable_devices(force: bool = False) -> List[Dict[str, str]]:
                 "state": s.get("state", "unknown"),
             })
     return devices
+
+AUXILIARY_SWITCH_WORDS = ("指示灯", "凌动开关", "物理控制锁", "童锁", "提示音", "自定义服务", "开始向左转", "开始向右转", "麦克风", "闹钟")
+
+def extract_device_aliases(dev: Dict[str, str]) -> List[str]:
+    """将米家/HA 带双空格后缀的设备名（如 '大灯  主灯'、'小米be6500  指示灯'）拆解为自然口语可命中的别名集合"""
+    raw_name = dev["name"].strip()
+    is_indicator = "指示灯" in raw_name
+    aliases = {raw_name, re.sub(r"\s+", "", raw_name)}
+    parts = [p.strip() for p in re.split(r"\s{2,}|\*", raw_name) if p.strip()]
+    if parts and not is_indicator:
+        head = parts[0]
+        if len(head) >= 2:
+            aliases.add(head)
+        no_brand = re.sub(r"^[A-Za-z0-9_\-\s]+", "", head).strip()
+        if len(no_brand) >= 2:
+            aliases.add(no_brand)
+    if is_indicator and ("小米" in raw_name or "be6500" in raw_name.lower()):
+        aliases.update(["小米指示灯", "路由器指示灯", "指示灯"])
+    if ("落地扇" in raw_name and not is_indicator) or dev["id"].startswith("fan."):
+        aliases.update(["落地扇", "风扇", "电风扇"])
+    if "吸顶灯" in raw_name and dev["id"].startswith("light.") and not is_indicator:
+        aliases.add("吸顶灯")
+    return [a for a in aliases if len(a) >= 2]
+
+def match_devices_in_query(query: str, devices: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """匹配口语中的目标设备：默认排除童锁/凌动开关等附属子开关，且在线主设备优先"""
+    want_aux = any(w in query for w in AUXILIARY_SWITCH_WORDS)
+    exact_candidates = []
+    generic_candidates = []
+    q_compact = re.sub(r"\s+", "", query)
+
+    for d in devices:
+        is_aux = any(w in d["name"] for w in AUXILIARY_SWITCH_WORDS)
+        if is_aux and not want_aux:
+            continue
+        aliases = extract_device_aliases(d)
+        best_len = 0
+        for al in aliases:
+            al_c = re.sub(r"\s+", "", al)
+            if al_c and al_c in q_compact:
+                best_len = max(best_len, len(al_c))
+        if best_len >= 3:
+            exact_candidates.append((best_len, d))
+        elif best_len == 2:
+            generic_candidates.append((best_len, d))
+
+    pool = exact_candidates if exact_candidates else generic_candidates
+    if not pool:
+        return []
+    # 如果池中既有高特异性匹配又有泛化词匹配，取最高匹配长度；并在同分下优先选择在线（非 unavailable）设备
+    max_l = max(x[0] for x in pool)
+    top_devs = [x[1] for x in pool if x[0] >= max_l]
+    online_devs = [d for d in top_devs if d.get("state") not in ("unavailable", "unknown")]
+    return online_devs if online_devs else top_devs
 
 def get_router_speeds() -> Dict[str, float]:
     states = get_ha_states_cached()
@@ -494,7 +741,7 @@ def notify_cardputer_alert(title: str, message: str):
     except Exception as e:
         return False, str(e)
 
-# ── 后台定时推送 nuctutu 算力指标到 HA（供 Cardputer 掌上投屏） + 异常主动守夜 ────
+# ── 后台定时推送边缘主机算力指标与最优待办到 HA + 异常主动守夜 ───────────────────
 def ha_telemetry_pusher():
     last_alert_ts = 0.0
     while True:
@@ -502,21 +749,19 @@ def ha_telemetry_pusher():
             mem = psutil.virtual_memory()
             cpu = psutil.cpu_percent(interval=1.0)
             primary = get_default_primary_id()
-            mems = list_memories(1)
-            latest_memo = mems[0]["content"][:28] if mems else "暂无待办备忘"
+            best_memo = get_best_memo_for_screen()
             push_ha_sensor("sensor.ai_legion_cpu", round(cpu, 1), "AI Legion CPU", "%")
             push_ha_sensor("sensor.ai_legion_ram", round(mem.percent, 1), "AI Legion RAM", "%")
             push_ha_sensor("sensor.ai_legion_model", MODEL_CATALOG[primary]["name"], "AI Legion Active Model")
-            push_ha_sensor("sensor.ai_legion_memo", latest_memo, "AI Legion Latest Memo")
+            push_ha_sensor("sensor.ai_legion_memo", best_memo, "AI Legion Latest Memo")
 
-            # 后台异常主动守夜（冷却 10 分钟防止刷屏）
             now = time.time()
             if now - last_alert_ts > 600:
                 if mem.percent > 90.0:
-                    notify_cardputer_alert("主机内存告警", f"nuctutu 内存占用已达 {mem.percent:.0f}%")
+                    notify_cardputer_alert("主机内存告警", f"{HOST_NAME} 内存占用已达 {mem.percent:.0f}%")
                     last_alert_ts = now
                 elif cpu > 92.0:
-                    notify_cardputer_alert("主机算力过载", f"nuctutu CPU 持续负载 {cpu:.0f}%")
+                    notify_cardputer_alert("主机算力过载", f"{HOST_NAME} CPU 持续负载 {cpu:.0f}%")
                     last_alert_ts = now
         except Exception:
             pass
@@ -524,15 +769,14 @@ def ha_telemetry_pusher():
 
 threading.Thread(target=ha_telemetry_pusher, daemon=True).start()
 
-# ── 多轮对话上下文滑动窗口缓存（保留最近 3 分钟内的多轮问答，支撑连贯追问） ────────
-RECENT_DIALOG_HISTORY: List[Dict[str, Any]] = []  # [{"role": "user"|"assistant", "content": str, "ts": float}]
+# ── 按终端来源隔离的多轮对话滑动窗口缓存（3 分钟有效，互不串台） ─────────────────
+RECENT_DIALOG_BUCKETS: Dict[str, List[Dict[str, Any]]] = {}
 
-def get_recent_history(incoming_msgs: Optional[List[Dict[str, str]]] = None, max_turns: int = 6) -> List[Dict[str, str]]:
+def get_recent_history(source: str, incoming_msgs: Optional[List[Dict[str, str]]] = None, max_turns: int = 6) -> List[Dict[str, str]]:
     now = time.time()
-    # 清理超过 180 秒的过期历史
-    while RECENT_DIALOG_HISTORY and (now - RECENT_DIALOG_HISTORY[0]["ts"] > 180):
-        RECENT_DIALOG_HISTORY.pop(0)
-    # 若上游（HA / OpenAI 客户端）已携带多轮 user/assistant 历史，优先提取上游历史（不含最后一条当前 user）
+    bucket = RECENT_DIALOG_BUCKETS.setdefault(source or "default", [])
+    while bucket and (now - bucket[0]["ts"] > 180):
+        bucket.pop(0)
     if incoming_msgs:
         filtered = [
             {"role": m["role"], "content": m["content"]}
@@ -541,16 +785,23 @@ def get_recent_history(incoming_msgs: Optional[List[Dict[str, str]]] = None, max
         ]
         if filtered:
             return filtered[-max_turns:]
-    return [{"role": x["role"], "content": x["content"]} for x in RECENT_DIALOG_HISTORY[-max_turns:]]
+    return [{"role": x["role"], "content": x["content"]} for x in bucket[-max_turns:]]
 
-def append_recent_turn(user_q: str, assistant_a: str):
+def append_recent_turn(source: str, user_q: str, assistant_a: str):
     now = time.time()
+    bucket = RECENT_DIALOG_BUCKETS.setdefault(source or "default", [])
     if user_q:
-        RECENT_DIALOG_HISTORY.append({"role": "user", "content": user_q, "ts": now})
+        bucket.append({"role": "user", "content": user_q, "ts": now})
     if assistant_a:
-        RECENT_DIALOG_HISTORY.append({"role": "assistant", "content": assistant_a, "ts": now})
-    while len(RECENT_DIALOG_HISTORY) > 10:
-        RECENT_DIALOG_HISTORY.pop(0)
+        bucket.append({"role": "assistant", "content": assistant_a, "ts": now})
+    while len(bucket) > 10:
+        bucket.pop(0)
+
+def clear_recent_history(source: str = None):
+    if source and source in RECENT_DIALOG_BUCKETS:
+        RECENT_DIALOG_BUCKETS[source].clear()
+    else:
+        RECENT_DIALOG_BUCKETS.clear()
 
 def warmup_primary_model():
     if OLLAMA_URL:
@@ -586,7 +837,6 @@ def run_llm_sync(
     start_t = time.time()
     hist = history or []
 
-    # 若配置了外部 Ollama（Docker 开源部署模式），走 HTTP 调用
     if OLLAMA_URL:
         try:
             user_msg = user_prompt
@@ -606,7 +856,6 @@ def run_llm_sync(
         except Exception as e:
             return {"text": f"Ollama 服务调用异常: {e}", "raw": "", "model_id": target_id, "latency_ms": 0}
 
-    # 本机 llama_cpp 线程安全直推模式
     with LLM_LOCK:
         ensure_model_stats(target_id)
         MODEL_STATS[target_id]["state"] = "THINKING" if enable_thinking else "ACTIVE"
@@ -640,21 +889,50 @@ def run_llm_sync(
         finally:
             MODEL_STATS[target_id]["state"] = "READY"
 
-# ── 异步后台时序调度（彻底不阻塞语音返回） ───────────────────────────────────────
-def schedule_async_actions(actions: List[Dict[str, Any]]):
-    def worker():
-        for act in actions:
-            srv = act.get("service", "")
-            eid = act.get("entity_id", "")
-            if srv == "delay":
-                secs = min(float(act.get("seconds", 5)), 300.0)
-                time.sleep(secs)
-            elif "." in srv and eid:
-                d, s = srv.split(".", 1)
-                execute_ha_service(d, s, eid)
-    threading.Thread(target=worker, daemon=True).start()
+# ── 可取消的异步后台时序调度（接入 PENDING_TIMERS，支持随时语音喊停） ────────────
+def schedule_async_actions(actions: List[Dict[str, Any]], desc: str = "延时家居任务") -> int:
+    cancel_ev = threading.Event()
+    tid = int(time.time() * 1000) % 1000000
+    entry = {
+        "id": tid,
+        "desc": desc,
+        "created_at": datetime.now().strftime("%H:%M:%S"),
+        "cancel_event": cancel_ev,
+    }
+    with TIMERS_LOCK:
+        PENDING_TIMERS.append(entry)
 
-# ── 统一智能体路由管线（L0 规则 -> L1 第二大脑 -> L2 家电控制 -> L3 闲聊） ─────────
+    def worker():
+        try:
+            for act in actions:
+                if cancel_ev.is_set():
+                    break
+                srv = act.get("service", "")
+                eid = act.get("entity_id", "")
+                if srv == "delay":
+                    secs = min(float(act.get("seconds", 5)), 3600.0)
+                    if cancel_ev.wait(timeout=secs):
+                        break
+                elif "." in srv and eid:
+                    d, s = srv.split(".", 1)
+                    execute_ha_service(d, s, eid)
+        finally:
+            with TIMERS_LOCK:
+                if entry in PENDING_TIMERS:
+                    PENDING_TIMERS.remove(entry)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return tid
+
+def cancel_all_pending_timers() -> int:
+    with TIMERS_LOCK:
+        cnt = len(PENDING_TIMERS)
+        for t in PENDING_TIMERS:
+            t["cancel_event"].set()
+        PENDING_TIMERS.clear()
+        return cnt
+
+# ── 统一智能体路由管线（L0 规则 -> L1 第二大脑读写销 -> L2 家电控制 -> L3 锚定对话） ─
 def get_real_ha_weather() -> Optional[str]:
     for s in get_ha_states_cached():
         eid = s.get("entity_id", "")
@@ -671,6 +949,29 @@ def get_real_ha_weather() -> Optional[str]:
             return "，".join(parts)
     return None
 
+def is_memory_delete_intent(q: str) -> bool:
+    has_del_verb = any(w in q for w in ("删掉", "删除", "移除", "清掉", "清除", "销掉", "取消"))
+    has_mem_noun = any(w in q for w in ("备忘", "随手记", "待办", "提醒", "记录", "日程", "事项"))
+    if has_del_verb and has_mem_noun:
+        return True
+    if any(w in q for w in ("办完了", "做完了", "干完了", "搞定了", "装好了")) and any(w in q for w in ("删", "销", "备忘", "随手记", "待办", "事")):
+        return True
+    return False
+
+def is_memory_query_intent(q: str) -> bool:
+    explicit_triggers = (
+        "放哪", "在哪放", "停在哪", "记过", "记了什么", "有什么记录", "备忘", "待办",
+        "随手记", "笔记", "清单", "什么事情", "什么事", "啥事", "要做的事",
+        "什么活", "啥活", "活要干", "有活吗", "有什么活动", "啥活动",
+        "安排", "日程", "计划", "提醒", "任务", "密码", "账号", "有说过"
+    )
+    if any(k in q for k in explicit_triggers):
+        return True
+    # 时间词 + 动作/事项询问句式（如“今天我要干啥”、“周末有啥要忙的”）
+    has_time = any(t in q for t in ("今天", "今日", "今晚", "明天", "明日", "后天", "大后天", "周末", "这周", "本周", "下周", "最近", "近期", "接下来"))
+    has_act = any(a in q for a in ("干啥", "干什么", "做啥", "做什么", "忙啥", "忙什么", "有什么要", "有啥要", "有课吗", "有会吗"))
+    return has_time and has_act
+
 def handle_voice_query_sync(
     query: str,
     source: str = "Voice",
@@ -679,12 +980,28 @@ def handle_voice_query_sync(
     incoming_messages: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     start_t = time.time()
-    q = re.sub(r"^[^\w\u4e00-\u9fff]+|[^\w\u4e00-\u9fff？?！!。，,]+$", "", (query or "").strip())
+    q = normalize_voice_text(query or "")
+    q = re.sub(r"^[^\w\u4e00-\u9fff]+|[^\w\u4e00-\u9fff？?！!。，,]+$", "", q.strip())
     if not re.sub(r"[^\w\u4e00-\u9fff]+", "", q):
         return {"voice_summary": "没听清，请再说一遍。", "result": "空语音已忽略", "model_id": "L0-Guard", "latency_ms": 0.1}
     primary = preferred_model if (preferred_model in MODEL_CATALOG) else get_default_primary_id()
 
-    # ===== L0-Weather：室外天气与气温诚实查询（有传感器报真值，无传感器绝不瞎编） =====
+    # ===== L0-Reset：重置对话上下文 / 取消后台延时任务 =====
+    if any(k in q for k in ("清空上下文", "重置对话", "清空对话记忆", "重新开始对话")):
+        clear_recent_history(source)
+        reply = "好的，已清空之前的对话上下文。"
+        lat = (time.time() - start_t) * 1000
+        record_telemetry(source, "L0-Rule", "清空会话上下文", q, reply, lat)
+        return {"voice_summary": reply, "result": reply, "model_id": "L0-Rule", "latency_ms": lat}
+
+    if any(k in q for k in ("取消定时", "取消延时", "停止倒计时", "取消倒计时")):
+        cnt = cancel_all_pending_timers()
+        reply = f"好的，已为你取消 {cnt} 个正在倒计时的家居任务。" if cnt > 0 else "当前没有正在倒计时的延时任务。"
+        lat = (time.time() - start_t) * 1000
+        record_telemetry(source, "L0-Rule", "取消异步延时任务", q, reply, lat)
+        return {"voice_summary": reply, "result": reply, "model_id": "L0-Rule", "latency_ms": lat}
+
+    # ===== L0-Weather：室外天气与气温诚实查询 =====
     if any(k in q for k in ("天气", "气温", "下雨", "下雪", "刮风", "多少度")) and not any(d in q for d in ("空调", "调到", "设为")):
         w_info = get_real_ha_weather()
         if w_info:
@@ -692,7 +1009,7 @@ def handle_voice_query_sync(
         else:
             reply = "当前处于纯离线模式，Home Assistant 尚未接入室外气象或温度传感器，无法查询实时天气。"
         lat = (time.time() - start_t) * 1000
-        append_recent_turn(q, reply)
+        append_recent_turn(source, q, reply)
         record_telemetry(source, "L0-Weather", "离线气象诚实核验", q, reply, lat)
         return {"voice_summary": reply, "result": reply, "model_id": "L0-Weather", "latency_ms": lat}
 
@@ -710,13 +1027,13 @@ def handle_voice_query_sync(
         mem = psutil.virtual_memory()
         cpu = psutil.cpu_percent(interval=0.1)
         spd = get_router_speeds()
-        reply = f"主机 nuctutu 运行正常，CPU 占用百分之{int(cpu)}，内存使用百分之{int(mem.percent)}，当前主机模型为 {MODEL_CATALOG[primary]['name']}，路由器下载 {spd['down_kb']} KB每秒。"
+        reply = f"主机 {HOST_NAME} 运行正常，CPU 占用百分之{int(cpu)}，内存使用百分之{int(mem.percent)}，当前主力模型为 {MODEL_CATALOG[primary]['name']}，路由器下载 {spd['down_kb']} KB每秒。"
         lat = (time.time() - start_t) * 1000
         record_telemetry(source, "L0-Ops", "HomeLab 语音查房", q, reply, lat)
         return {"voice_summary": reply, "result": reply, "model_id": "L0-Ops", "latency_ms": lat}
 
     # ===== L1-A：离线“家庭第二大脑”写入（自动将相对日期锚定为绝对日期） =====
-    mem_add_match = re.match(r"^(?:请)?(?:帮我)?(?:记一下|记住|备忘|记录一下|提醒我)[：:，,\s]*(.+)$", q)
+    mem_add_match = re.match(r"^(?:请)?(?:帮我)?(?:记一下|记住|备忘|记录一下|记入随手记|提醒我)[：:，,\s]*(.+)$", q)
     if mem_add_match:
         content = mem_add_match.group(1).strip()
         cat = "物品位置" if any(w in content for w in ("放在", "停在", "抽屉", "柜子", "车位")) else "随手记"
@@ -728,88 +1045,138 @@ def handle_voice_query_sync(
         else:
             reply = f"好的，已记入本地{item['category']}：{content}"
         lat = (time.time() - start_t) * 1000
+        append_recent_turn(source, q, reply)
         record_telemetry(source, "L1-Memory", f"第二大脑写入 ({item['category']})", q, reply, lat)
         return {"voice_summary": reply, "result": reply, "model_id": "L1-Memory", "latency_ms": lat, "memory": item}
 
-    # ===== L1-B：离线“家庭第二大脑”检索（自然口语全覆盖 + 严格时间窗口过滤） =====
-    mem_query_triggers = (
-        "放哪了", "在哪放着", "停在哪", "记过什么", "有什么备忘", "有什么待办",
-        "查一下备忘", "我的备忘", "什么事情", "什么事", "要做的事", "安排", "日程",
-        "计划", "提醒", "待办", "密码", "随手记"
-    )
-    if any(k in q for k in mem_query_triggers):
+    # ===== L1-Del：离线“家庭第二大脑”语音销账/删除备忘 =====
+    if is_memory_delete_intent(q):
+        ok, deleted_item = delete_memory_by_voice_keyword(q)
+        if ok and deleted_item:
+            reply = f"好的，已从随手记中移除：{deleted_item['content']}"
+        else:
+            reply = "在随手记里没有找到匹配的条目，请说出具体事项关键词。"
+        lat = (time.time() - start_t) * 1000
+        append_recent_turn(source, q, reply)
+        record_telemetry(source, "L1-Memory", "第二大脑语音销账", q, reply, lat)
+        return {"voice_summary": reply, "result": reply, "model_id": "L1-Memory", "latency_ms": lat}
+
+    # ===== L1-B：离线“家庭第二大脑”检索（全方位口语覆盖 + 严格事实核验） =====
+    if is_memory_query_intent(q):
         today = datetime.now().date()
         wd_now = CN_WEEKDAY_NAMES[today.weekday()]
-        sr = search_memories(q, top_k=6)
+        sr = search_memories(q, top_k=8)
         hits = sr["items"]
         win_lbl = sr["window_label"]
         if not hits:
             if win_lbl:
-                reply = f"查看了本地日程，{win_lbl}没有安排任何事项。"
+                reply = f"查看了你的本地随手记，{win_lbl}没有安排任何事项。"
             else:
-                reply = "本地记忆库里目前还没有相关记录。"
+                reply = "查看了你的本地随手记，目前没有相关记录。"
             lat = (time.time() - start_t) * 1000
+            append_recent_turn(source, q, reply)
             record_telemetry(source, "L1-Memory", "第二大脑精准查询", q, reply, lat)
             return {"voice_summary": reply, "result": reply, "model_id": "L1-Memory", "latency_ms": lat}
+
         ctx = "\n".join([format_memory_for_llm(m, today) for m in hits])
         res = run_llm_sync(
             system_prompt=(
-                f"你是家庭离线记忆管家。今天是 {today.strftime('%Y年%m月%d日')} {wd_now}。"
-                "请严格依据下方检索到的真实本地记录回答用户，直接说出具体日期和事项，口语简短不超过45字，绝不编造。"
+                f"你是家庭离线记忆管家。今天是 {today.strftime('%Y年%m月%d日')} {wd_now}。\n"
+                "【最高铁律】请严格、唯一地依据下方检索到的真实本地记录回答用户！"
+                "记录里有什么就答什么；记录里没有的内容必须明确回答“随手记里没有这项记录”，严禁推测或编造任何事项！口语简短不超过45字。"
             ),
-            user_prompt=f"【本地记忆记录（已按时间窗口筛选）】\n{ctx}\n\n用户提问：{q}",
+            user_prompt=f"【真实本地随手记记录（{win_lbl or '关键词检索'}）】\n{ctx}\n\n用户提问：{q}",
             model_id=primary,
             enable_thinking=False,
             max_tokens=100,
-            temperature=0.1,
+            temperature=0.05,
         )
-        reply = res["text"] or f"找到记录：{hits[0]['content']}"
-        append_recent_turn(q, reply)
+        reply = res["text"] or f"随手记里有：{hits[0]['content']}"
+        append_recent_turn(source, q, reply)
         record_telemetry(source, primary, f"第二大脑 RAG ({win_lbl or '关键词'})", q, reply, res["latency_ms"])
         return {"voice_summary": reply, "result": reply, "model_id": primary, "latency_ms": res["latency_ms"]}
 
-    # ===== L2：智能家居设备控制（精准判定，杜绝误伤闲聊） =====
+    # ===== L2：智能家居设备控制（支持双空格米家设备名清洗 + 在线主设备毫秒直通） =====
     devices = get_controllable_devices()
-    matched_by_name = [d for d in devices if d["name"] in q]
-    control_phrases = ("开灯", "关灯", "打开", "关闭", "关掉", "熄灭", "吸顶灯", "大灯", "风扇", "空调", "窗帘", "指示灯", "全屋设备", "家里设备")
-    is_home_control = bool(matched_by_name) or any(p in q for p in control_phrases)
+    matched_devs = match_devices_in_query(q, devices)
+    control_phrases = ("开灯", "关灯", "打开", "关闭", "关掉", "熄灭", "吸顶灯", "大灯", "风扇", "落地扇", "空调", "窗帘", "指示灯", "全屋设备", "家里设备")
+    is_home_control = bool(matched_devs) or any(p in q for p in control_phrases)
 
     if is_home_control and devices:
-        # L0 极速单步直通（无延时/无多步词，且明确匹配到设备 + 开/关）
-        has_delay = bool(re.search(r"\d+\s*[秒分]", q)) or any(w in q for w in ("再", "然后", "之后", "开着的", "关着的"))
-        if not has_delay and matched_by_name and len(matched_by_name) == 1:
-            dev = matched_by_name[0]
+        has_multi_target = any(w in q for w in ("所有", "全部", "全屋", "开着的", "关着的"))
+        delay_m = re.search(r"([0-9一二两三四五六七八九十]{1,3})\s*(秒钟?|分钟?)", q)
+        has_delay = bool(delay_m) or any(w in q for w in ("再", "然后", "之后"))
+
+        if not has_multi_target and len(matched_devs) == 1:
+            dev = matched_devs[0]
+            clean_dev_name = re.sub(r"\s{2,}(?:主灯|风扇)$", "", dev["name"]).strip()
+            clean_dev_name = re.sub(r"\s{2,}", "", clean_dev_name) or dev["name"]
+            if dev.get("state") == "unavailable":
+                reply = f"{clean_dev_name}当前处于离线断电状态，请检查物理开关。"
+                lat = (time.time() - start_t) * 1000
+                record_telemetry(source, "L0-Rule", "离线设备快速拦截", q, reply, lat)
+                return {"voice_summary": reply, "result": reply, "model_id": "L0-Rule", "latency_ms": lat}
+
             domain = dev["id"].split(".")[0]
-            if any(w in q for w in ("打开", "开启", "启动")) and not any(w in q for w in ("关", "熄")):
-                ok, _ = execute_ha_service(domain, "turn_on", dev["id"])
-                reply = f"好的，已为你打开{dev['name']}。" if ok else f"尝试打开{dev['name']}失败，请检查设备在线状态。"
-                lat = (time.time() - start_t) * 1000
-                record_telemetry(source, "L0-Rule", "极速单步开设备", q, reply, lat)
-                return {"voice_summary": reply, "result": reply, "model_id": "L0-Rule", "latency_ms": lat}
-            if any(w in q for w in ("关闭", "关掉", "熄灭")) and not any(w in q for w in ("打开", "开启")):
-                ok, _ = execute_ha_service(domain, "turn_off", dev["id"])
-                reply = f"好的，已为你关闭{dev['name']}。" if ok else f"尝试关闭{dev['name']}失败，请检查设备在线状态。"
-                lat = (time.time() - start_t) * 1000
-                record_telemetry(source, "L0-Rule", "极速单步关设备", q, reply, lat)
-                return {"voice_summary": reply, "result": reply, "model_id": "L0-Rule", "latency_ms": lat}
+            if not has_delay:
+                if any(w in q for w in ("打开", "开启", "启动", "开一下")) and not any(w in q for w in ("关", "熄")):
+                    ok, _ = execute_ha_service(domain, "turn_on", dev["id"])
+                    reply = f"好的，已为你打开{clean_dev_name}。" if ok else f"尝试打开{clean_dev_name}失败，请检查设备状态。"
+                    lat = (time.time() - start_t) * 1000
+                    record_telemetry(source, "L0-Rule", "极速单步开设备", q, reply, lat)
+                    return {"voice_summary": reply, "result": reply, "model_id": "L0-Rule", "latency_ms": lat}
+                if any(w in q for w in ("关闭", "关掉", "熄灭", "关一下", "关了")) and not any(w in q for w in ("打开", "开启")):
+                    ok, _ = execute_ha_service(domain, "turn_off", dev["id"])
+                    reply = f"好的，已为你关闭{clean_dev_name}。" if ok else f"尝试关闭{clean_dev_name}失败，请检查设备状态。"
+                    lat = (time.time() - start_t) * 1000
+                    record_telemetry(source, "L0-Rule", "极速单步关设备", q, reply, lat)
+                    return {"voice_summary": reply, "result": reply, "model_id": "L0-Rule", "latency_ms": lat}
+            elif delay_m:
+                # L0 极速延时调度（支持“过30秒关闭XX”以及“把XX关闭，过3秒再打开”）
+                num_val = parse_cn_int(delay_m.group(1)) or 5
+                unit_str = delay_m.group(2)
+                secs = num_val * 60 if "分" in unit_str else num_val
+                before_delay, after_delay = q[:delay_m.start()], q[delay_m.end():]
+                act1 = "turn_on" if any(w in before_delay for w in ("打开", "开启", "启动")) else ("turn_off" if any(w in before_delay for w in ("关闭", "关掉", "熄灭", "关了")) else None)
+                act2 = "turn_on" if any(w in after_delay for w in ("打开", "开启", "启动")) else ("turn_off" if any(w in after_delay for w in ("关闭", "关掉", "熄灭", "关了")) else None)
+                if act1 and act2:
+                    execute_ha_service(domain, act1, dev["id"])
+                    tid = schedule_async_actions([{"service": "delay", "seconds": secs}, {"service": f"{domain}.{act2}", "entity_id": dev["id"]}], desc=q[:30])
+                    a1_cn = "打开" if act1 == "turn_on" else "关闭"
+                    a2_cn = "打开" if act2 == "turn_on" else "关闭"
+                    reply = f"好的，已先{a1_cn}{clean_dev_name}，将在{num_val}{unit_str[0]}后自动{a2_cn}。"
+                    lat = (time.time() - start_t) * 1000
+                    record_telemetry(source, "L0-Timer", f"极速往返延时 #{tid}", q, reply, lat)
+                    return {"voice_summary": reply, "result": reply, "model_id": "L0-Timer", "latency_ms": lat}
+                elif act2 and not act1:
+                    tid = schedule_async_actions([{"service": "delay", "seconds": secs}, {"service": f"{domain}.{act2}", "entity_id": dev["id"]}], desc=q[:30])
+                    a2_cn = "打开" if act2 == "turn_on" else "关闭"
+                    reply = f"好的，已设定倒计时，将在{num_val}{unit_str[0]}后为你{a2_cn}{clean_dev_name}。"
+                    lat = (time.time() - start_t) * 1000
+                    record_telemetry(source, "L0-Timer", f"极速单步延时 #{tid}", q, reply, lat)
+                    return {"voice_summary": reply, "result": reply, "model_id": "L0-Timer", "latency_ms": lat}
 
-        # 复杂/多步/模糊设备指令 -> 交给 Qwen3 真实 JSON 规划 + 异步延时
-        dev_lines = "\n".join([f"- {d['id']} | 名称: {d['name']} | 状态: {d['state']}" for d in devices])
-        sys_prompt = f"""你是 Home Assistant 本地决策大脑。根据真实设备列表输出严格 JSON（不要输出其他文字）。
-【真实设备列表】
-{dev_lines}
-
-【输出 JSON 格式】
-{{
-  "thought": "简短中文分析",
-  "voice_summary": "一句简短口语中文答复（不超过30字）",
-  "sequence": [
-    {{"service": "light.turn_off", "entity_id": "真实ID"}},
-    {{"service": "delay", "seconds": 5}},
-    {{"service": "light.turn_on", "entity_id": "真实ID"}}
-  ]
-}}"""
-        res = run_llm_sync(sys_prompt, f"用户指令：{q}", model_id=primary, enable_thinking=force_think, max_tokens=300, temperature=0.1)
+        # 复杂/多步/多设备指令 -> 用短编号 D1..Dn 映射替代超长米家实体 ID，提速 5 倍且零拼写错误
+        want_aux = any(w in q for w in AUXILIARY_SWITCH_WORDS)
+        filtered_devs = [d for d in devices if want_aux or not any(w in d["name"] for w in ("凌动开关", "物理控制锁", "童锁", "提示音", "自定义服务", "开始向左转", "开始向右转"))]
+        if not filtered_devs:
+            filtered_devs = devices
+        short_map = {}
+        dev_lines = []
+        for i, d in enumerate(filtered_devs, 1):
+            code = f"D{i}"
+            short_map[code] = d["id"]
+            short_map[d["id"]] = d["id"]
+            dom = d["id"].split(".")[0]
+            dev_lines.append(f"- {code} ({dom}) | 名称: {d['name']} | 状态: {d['state']}")
+        dev_block = "\n".join(dev_lines)
+        sys_prompt = f"""你是智能家居决策大脑。请根据设备表输出严格JSON，不要解释。
+若目标设备为 unavailable，在 voice_summary 告知离线，sequence 留空 []。
+【设备表】
+{dev_block}
+【JSON格式】
+{{"voice_summary":"简短口语答复","sequence":[{{"service":"light.turn_off","entity_id":"D1"}},{{"service":"delay","seconds":3}},{{"service":"light.turn_on","entity_id":"D1"}}]}}"""
+        res = run_llm_sync(sys_prompt, f"指令：{q}", model_id=primary, enable_thinking=force_think, max_tokens=160, temperature=0.05)
         raw_out = res["text"]
         voice_summary = ""
         thought = ""
@@ -820,18 +1187,21 @@ def handle_voice_query_sync(
             parsed = json.loads(m.group(0) if m else raw_out)
             thought = parsed.get("thought", "")
             voice_summary = parsed.get("voice_summary", "")
-            seq = parsed.get("sequence", [])
+            raw_seq = parsed.get("sequence", [])
+            for st_item in raw_seq:
+                if "entity_id" in st_item and st_item["entity_id"] in short_map:
+                    st_item["entity_id"] = short_map[st_item["entity_id"]]
+                seq.append(st_item)
         except Exception:
             voice_summary = raw_out[:60] if raw_out else "已处理你的家居指令。"
 
-        # 立即执行 delay 之前的步骤，遇到 delay 则把剩余步骤丢入后台异步线程（0 阻塞！）
         for idx, step in enumerate(seq):
             srv = step.get("service", "")
             eid = step.get("entity_id", "")
             if srv == "delay":
                 remaining = seq[idx:]
-                schedule_async_actions(remaining)
-                exec_logs.append(f"⏱️ 后台异步调度后续 {len(remaining)} 个时序动作（不阻塞语音返回）")
+                tid = schedule_async_actions(remaining, desc=q[:30])
+                exec_logs.append(f"⏱️ 后台任务 #{tid} 调度后续 {len(remaining)} 步（可随时说“取消定时”中止）")
                 break
             elif "." in srv and eid:
                 d, s = srv.split(".", 1)
@@ -852,20 +1222,25 @@ def handle_voice_query_sync(
             "latency_ms": lat,
         }
 
-    # ===== L3：纯本地多轮自然语言对话（支持快/慢双模 + 上下文追问连贯） =====
+    # ===== L3：事实锚定型多轮自然语言对话（自动挂载真实随手记快照，100% 杜绝瞎编个人日程） =====
     today = datetime.now().date()
     wd_now = CN_WEEKDAY_NAMES[today.weekday()]
-    hist = get_recent_history(incoming_messages, max_turns=6)
+    hist = get_recent_history(source, incoming_messages, max_turns=6)
+    mem_snapshot = build_grounding_memories_snippet(limit=8)
     sys_prompt = (
-        f"你是运行在家庭边缘主机 nuctutu 上的纯离线语音管家。今天是 {today.strftime('%Y年%m月%d日')} {wd_now}。"
-        "请结合上下文用简短、自然、纯口语的中文回答（不超过45字），严禁编造实时联网信息，严禁输出代码块或 Markdown 符号。"
+        f"你是运行在家庭边缘主机 {HOST_NAME} 上的纯离线语音管家。今天是 {today.strftime('%Y年%m月%d日')} {wd_now}。\n"
+        "【最高事实铁律】\n"
+        "1. 下方【真实本地随手记】是用户唯一的个人日程、活计、活动、物品位置与备忘来源。\n"
+        "2. 凡涉及用户个人的安排、任务、曾说过的话，必须100%严格依据【真实本地随手记】回答！列表里没有的事项必须直接说“你的随手记里没有这项记录”，严禁根据日常生活猜测或编造任何任务（严禁编造洗车、做家务、陪家人吃饭等虚假内容）！\n"
+        "3. 严禁编造实时联网资讯或天气，用简短自然的纯口语中文回答（不超过45字），不输出 Markdown 符号。\n"
+        f"【真实本地随手记】\n{mem_snapshot}"
     )
     res = run_llm_sync(
         sys_prompt, q, model_id=primary, enable_thinking=force_think,
-        max_tokens=380 if force_think else 90, temperature=0.35, history=hist
+        max_tokens=380 if force_think else 90, temperature=0.2, history=hist
     )
     reply = res["text"] or "我在，有什么可以帮你的？"
-    append_recent_turn(q, reply)
+    append_recent_turn(source, q, reply)
     record_telemetry(source, primary, "深度推理" if force_think else "端侧多轮对话", q, reply, res["latency_ms"])
     return {
         "voice_summary": reply,
@@ -877,15 +1252,18 @@ def handle_voice_query_sync(
 # ── API 端点：系统状态 / 真实模型 / 第二大脑 / HA 设备 / 遥测 ────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "primary_model": get_default_primary_id(), "time": time.time()}
+    return {"status": "ok", "host": HOST_NAME, "primary_model": get_default_primary_id(), "time": time.time()}
 
 @app.get("/api/system")
 def api_system():
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     spd = get_router_speeds()
+    with TIMERS_LOCK:
+        timers_view = [{"id": t["id"], "desc": t["desc"], "created_at": t["created_at"]} for t in PENDING_TIMERS]
     return {
-        "host": "nuctutu (NUC8i5BEK · i5-8259U 4C8T)",
+        "host": HOST_LABEL,
+        "host_name": HOST_NAME,
         "total_ram_gb": round(mem.total / (1024**3), 1),
         "used_ram_gb": round(mem.used / (1024**3), 1),
         "free_ram_gb": round(mem.available / (1024**3), 1),
@@ -896,6 +1274,7 @@ def api_system():
         "router_up_kb": spd["up_kb"],
         "primary_model": get_default_primary_id(),
         "uptime_hours": round((time.time() - psutil.boot_time()) / 3600.0, 1),
+        "pending_timers": timers_view,
         "services": get_real_pipeline_services(),
     }
 
@@ -928,23 +1307,23 @@ def api_models():
         })
     return items
 
-@app.post("/api/models/{model_id}/select")
+@app.post("/api/models/{model_id}/select", dependencies=[Depends(verify_optional_token)])
 async def select_primary_model(model_id: str):
     global ACTIVE_PRIMARY_ID
     if model_id not in MODEL_CATALOG:
         raise HTTPException(status_code=404, detail="Unknown model")
     path = os.path.join(MODELS_DIR, MODEL_CATALOG[model_id]["filename"])
-    if not os.path.exists(path):
+    if not os.path.exists(path) and not OLLAMA_URL:
         raise HTTPException(status_code=400, detail="Model file not found on disk")
     ACTIVE_PRIMARY_ID = model_id
     return {"status": "ok", "primary_model": ACTIVE_PRIMARY_ID}
 
-@app.post("/api/models/{model_id}/unload")
+@app.post("/api/models/{model_id}/unload", dependencies=[Depends(verify_optional_token)])
 async def unload_model_api(model_id: str):
     ok = unload_local_llm(model_id)
     return {"status": "unloaded" if ok else "not_loaded", "model_id": model_id}
 
-@app.get("/api/memories")
+@app.get("/api/memories", dependencies=[Depends(verify_optional_token)])
 def api_get_memories():
     return list_memories(50)
 
@@ -952,16 +1331,21 @@ class MemoryCreate(BaseModel):
     content: str
     category: str = "随手记"
 
-@app.post("/api/memories")
+@app.post("/api/memories", dependencies=[Depends(verify_optional_token)])
 def api_add_memory(req: MemoryCreate):
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="Content required")
     return add_memory(req.content, req.category)
 
-@app.delete("/api/memories/{mid}")
+@app.delete("/api/memories/{mid}", dependencies=[Depends(verify_optional_token)])
 def api_delete_memory(mid: int):
     ok = delete_memory(mid)
     return {"deleted": ok, "id": mid}
+
+@app.post("/api/timers/cancel", dependencies=[Depends(verify_optional_token)])
+def api_cancel_timers():
+    cnt = cancel_all_pending_timers()
+    return {"cancelled": cnt}
 
 @app.get("/api/telemetry")
 def api_telemetry():
@@ -975,7 +1359,7 @@ class NotifyReq(BaseModel):
     title: str = "集群通知"
     message: str
 
-@app.post("/api/notify_cardputer")
+@app.post("/api/notify_cardputer", dependencies=[Depends(verify_optional_token)])
 def api_notify_cardputer(req: NotifyReq):
     ok, info = notify_cardputer_alert(req.title, req.message)
     record_telemetry("反向主动唤醒", "Cardputer-Adv", "屏幕弹窗推送", req.title, req.message, 10.0)
@@ -986,7 +1370,7 @@ class ExecuteReq(BaseModel):
     model_id: Optional[str] = None
     think: bool = False
 
-@app.post("/api/execute")
+@app.post("/api/execute", dependencies=[Depends(verify_optional_token)])
 async def api_execute(req: ExecuteReq):
     return await asyncio.to_thread(
         handle_voice_query_sync,
@@ -1049,7 +1433,6 @@ async def ollama_chat(request: Request):
         if m.get("role") == "user":
             user_query = m.get("content", "")
             break
-    # 始终以控制塔选定的主力模型为准（在控制塔切模型后全屋立即生效，无需重配 HA）
     target_mid = get_default_primary_id()
     res = await asyncio.to_thread(handle_voice_query_sync, user_query, "Cardputer / HA Assist", target_mid, False, messages)
     reply = res.get("voice_summary", "收到。")
@@ -1068,7 +1451,7 @@ async def ollama_chat(request: Request):
 def openai_models():
     return {
         "object": "list",
-        "data": [{"id": f"{mid}:latest", "object": "model", "owned_by": "nuctutu"} for mid in MODEL_CATALOG],
+        "data": [{"id": f"{mid}:latest", "object": "model", "owned_by": HOST_NAME} for mid in MODEL_CATALOG],
     }
 
 @app.post("/v1/chat/completions")
@@ -1097,9 +1480,9 @@ def index():
     if os.path.exists(html_file):
         with open(html_file, "r", encoding="utf-8") as f:
             return f.read()
-    return "<h1>AI Legion v2.0 Mission Control</h1>"
+    return "<h1>AI Legion v2.3 Mission Control</h1>"
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"[AI-Legion v2.0] Starting on port {PORT} | Primary: {get_default_primary_id()}")
+    print(f"[AI-Legion v2.3] Starting on port {PORT} | Host: {HOST_NAME} | Primary: {get_default_primary_id()}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)

@@ -18,28 +18,24 @@ services:
     environment:
       - TZ=${TZ:-Asia/Shanghai}
 
-  # 2. Wyoming Faster-Whisper (本地语音转文字 STT)
-  whisper:
-    image: rhasspy/wyoming-faster-whisper:latest
-    container_name: wyoming-whisper
+  # 2. Wyoming ASR 离线语音识别（默认提供 SenseVoiceSmall INT8 100ms 极速方案；若需旧版 Whisper 可自行替换）
+  sensevoice:
+    image: python:3.11-slim
+    container_name: wyoming-sensevoice
     restart: unless-stopped
+    working_dir: /app
     ports:
       - "10300:10300"
-    command:
-      - --model
-      - small
-      - --language
-      - zh
-      - --initial-prompt
-      - "普通话简体中文"
-      - --uri
-      - tcp://0.0.0.0:10300
-      - --data-dir
-      - /data
     volumes:
-      - ./whisper-data:/data
+      - ./ai-legion:/app:ro
+      - ./sensevoice-models:/models/sensevoice:ro
     environment:
       - TZ=${TZ:-Asia/Shanghai}
+      - SENSEVOICE_MODEL_DIR=/models/sensevoice
+      - SENSEVOICE_URI=tcp://0.0.0.0:10300
+    command: >
+      sh -c "pip install --no-cache-dir sherpa-onnx wyoming numpy &&
+             python wyoming_sensevoice.py"
 
   # 3. Wyoming Piper (本地高质量语音合成 TTS)
   piper:
@@ -60,7 +56,7 @@ services:
     environment:
       - TZ=${TZ:-Asia/Shanghai}
 
-  # 4. Ollama (端侧轻量级大模型推理引擎)
+  # 4. Ollama (可选外部推理引擎；若宿主机直载 GGUF 则无需启用)
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
@@ -72,7 +68,7 @@ services:
     environment:
       - TZ=${TZ:-Asia/Shanghai}
 
-  # 5. AI Legion 动作调度网关 (连接 HA 实体工具与本地大模型)
+  # 5. AI Legion v2.3 算力控制塔与第二大脑网关
   ai-legion:
     build: ./ai-legion
     container_name: ai-legion

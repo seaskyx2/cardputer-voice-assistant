@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Legion v2.0 · nuctutu 端侧算力控制塔</title>
+  <title>AI Legion v2.3 · 端侧算力控制塔</title>
   <style>
     :root {
       --bg: #070b14;
@@ -160,10 +160,10 @@
         <div class="logo">AI</div>
         <div>
           <h1>
-            AI Legion v2.0 算力控制塔
+            AI Legion v2.3 算力控制塔
             <span class="badge badge-green">100% 离线实测数据</span>
           </h1>
-          <p id="host-desc">nuctutu 边缘主机 · 端侧小模型集群 + 家庭第二大脑 + Home Assistant 总线</p>
+          <p id="host-desc">边缘主机 · 端侧小模型集群 + 家庭第二大脑 + Home Assistant 总线</p>
         </div>
       </div>
       <div class="metrics">
@@ -262,14 +262,32 @@
   </main>
 
   <script>
-    async function fetchJSON(url, opts) {
+    let currentHostName = '本地边缘主机';
+
+    async function fetchJSON(url, opts = {}) {
+      const tok = localStorage.getItem('legion_token') || '';
+      if (tok) {
+        opts.headers = Object.assign({}, opts.headers || {}, { 'X-Legion-Token': tok });
+      }
       const r = await fetch(url, opts);
+      if (r.status === 401) {
+        const inputTok = prompt('该控制塔已启用访问令牌保护，请输入 LEGION_API_TOKEN:');
+        if (inputTok) {
+          localStorage.setItem('legion_token', inputTok.trim());
+          return fetchJSON(url, opts);
+        }
+      }
       return await r.json();
     }
 
     async function loadSystem() {
       try {
         const d = await fetchJSON('/api/system');
+        if (d.host_name) {
+          currentHostName = d.host_name;
+          document.title = `AI Legion v2.3 · ${d.host_name} 端侧算力控制塔`;
+          document.getElementById('host-desc').textContent = `${d.host} · 端侧小模型集群 + 家庭第二大脑 + Home Assistant 总线`;
+        }
         document.getElementById('m-cpu').textContent = d.cpu_percent + '%';
         document.getElementById('m-ram').textContent = `${d.used_ram_gb} / ${d.total_ram_gb} GB (${d.ram_percent}%)`;
         document.getElementById('m-free').textContent = d.free_ram_gb + ' GB';
@@ -431,7 +449,7 @@
       const res = await fetchJSON('/api/notify_cardputer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'AI Legion 战报', message: 'nuctutu 集群在线，SenseVoice + Qwen3-4B 待命中' })
+        body: JSON.stringify({ title: 'AI Legion 战报', message: `${currentHostName} 集群在线，SenseVoice + Qwen3-4B 待命中` })
       });
       out.textContent = res.ok ? '已成功反向点亮 Cardputer 屏幕并弹出通知卡片！' : ('推送失败: ' + res.detail);
       loadTelemetry();

@@ -1,3 +1,4 @@
+import os
 import re
 import asyncio
 import time
@@ -13,15 +14,39 @@ from wyoming.server import AsyncEventHandler, AsyncServer
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
 _LOGGER = logging.getLogger("wyoming_sensevoice")
 
-MODEL_PATH = "/opt/stacks/ai-legion/models/sensevoice/model.int8.onnx"
-TOKENS_PATH = "/opt/stacks/ai-legion/models/sensevoice/tokens.txt"
-URI = "tcp://0.0.0.0:10300"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_MODEL_DIR = os.path.join(BASE_DIR, "models", "sensevoice")
+if not os.path.exists(DEFAULT_MODEL_DIR) and os.path.exists("/opt/stacks/ai-legion/models/sensevoice"):
+    DEFAULT_MODEL_DIR = "/opt/stacks/ai-legion/models/sensevoice"
 
-_LOGGER.info("Loading SenseVoiceSmall INT8 model via sherpa-onnx...")
+MODEL_DIR = os.getenv("SENSEVOICE_MODEL_DIR", DEFAULT_MODEL_DIR)
+MODEL_PATH = os.getenv("SENSEVOICE_MODEL_PATH", os.path.join(MODEL_DIR, "model.int8.onnx"))
+TOKENS_PATH = os.getenv("SENSEVOICE_TOKENS_PATH", os.path.join(MODEL_DIR, "tokens.txt"))
+URI = os.getenv("SENSEVOICE_URI", "tcp://0.0.0.0:10300")
+NUM_THREADS = int(os.getenv("SENSEVOICE_THREADS", "4"))
+
+# 领域高频同音词纠偏表（消除口语/方言同音误转，如“随手记”->“随手机”）
+HOMOPHONE_FIXES = (
+    ("随手机", "随手记"),
+    ("随手计", "随手记"),
+    ("备忘路", "备忘录"),
+    ("被忘录", "备忘录"),
+    ("代办事项", "待办事项"),
+    ("有什么代办", "有什么待办"),
+    ("吸顶等", "吸顶灯"),
+)
+
+def normalize_asr_text(text: str) -> str:
+    for wrong, right in HOMOPHONE_FIXES:
+        if wrong in text:
+            text = text.replace(wrong, right)
+    return text
+
+_LOGGER.info(f"Loading SenseVoiceSmall INT8 model via sherpa-onnx from {MODEL_PATH} ...")
 recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
     model=MODEL_PATH,
     tokens=TOKENS_PATH,
-    num_threads=4,
+    num_threads=NUM_THREADS,
     use_itn=True,
     language="zh",
     debug=False,
@@ -37,7 +62,7 @@ WYOMING_INFO = Info(
             description="SenseVoiceSmall INT8 via sherpa-onnx (Ultra-Fast CPU ASR)",
             attribution=Attribution(name="FunAudioLLM / sherpa-onnx", url="https://github.com/k2-fsa/sherpa-onnx"),
             installed=True,
-            version="2.0.2",
+            version="2.3.0",
             models=[
                 AsrModel(
                     name="sensevoice-small-int8",
@@ -64,11 +89,10 @@ def decode_pcm_sync(audio_bytes: bytes, sample_rate: int = 16000) -> str:
     stream.accept_waveform(sample_rate, samples)
     recognizer.decode_stream(stream)
     raw_text = stream.result.text.strip()
-    # 剥离标点与空白后若无任何有效汉字/字母/数字（如底噪吐出的单个“。”），过滤为空串
     meaningful = re.sub(r"[^\w\u4e00-\u9fff]+", "", raw_text)
     if not meaningful:
         return ""
-    return raw_text
+    return normalize_asr_text(raw_text)
 
 class SenseVoiceHandler(AsyncEventHandler):
     def __init__(self, *args, **kwargs):

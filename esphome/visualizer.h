@@ -22,7 +22,7 @@ static uint32_t last_rssi_sample_ms = 0;
 
 inline void record_rssi(float rssi, uint32_t now) {
   if (std::isnan(rssi) || rssi > 0.0f || rssi < -120.0f) return;
-  if (now - last_rssi_sample_ms >= 1000 || last_rssi_sample_ms == 0) {
+  if ((uint32_t)(now - last_rssi_sample_ms) >= 1000 || last_rssi_sample_ms == 0) {
     last_rssi_sample_ms = now;
     for (int i = 0; i < RSSI_HISTORY_LEN - 1; i++) {
       rssi_history[i] = rssi_history[i + 1];
@@ -136,6 +136,18 @@ inline int get_scanner_x(int width, uint32_t ms) {
     phase = period - phase;
   }
   return (phase * 2 * width) / period;
+}
+
+// 严谨的单行 UTF-8 安全截断 (绝不劈裂多字节中文字符)
+inline std::string truncate_utf8(const std::string &in, size_t max_bytes, bool ellipsis = true) {
+  if (in.size() <= max_bytes) {
+    return in;
+  }
+  size_t pos = max_bytes;
+  while (pos > 0 && (static_cast<uint8_t>(in[pos]) & 0xC0) == 0x80) {
+    pos--;
+  }
+  return ellipsis ? (in.substr(0, pos) + "...") : in.substr(0, pos);
 }
 
 // 严谨的 UTF-8 中文双行平滑拆分算法 (防止汉字字节腰斩乱码)
