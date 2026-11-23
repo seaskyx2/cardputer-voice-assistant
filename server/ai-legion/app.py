@@ -47,7 +47,7 @@ LEGION_API_TOKEN = os.getenv("LEGION_API_TOKEN", "").strip()  # 可选：配置�
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "memory.db")
 
-app = FastAPI(title="AI Legion v2.3 · 端侧小模型集群控制塔")
+app = FastAPI(title="AI Legion v2.6 · 端侧小模型集群控制塔")
 
 def verify_optional_token(request: Request):
     """可选局域网写接口防护：若 .env 配置了 LEGION_API_TOKEN 则强制校验，未配置则默认放行"""
@@ -198,6 +198,65 @@ def resolve_relative_date(text: str, base_dt: datetime = None) -> Optional[str]:
         return (monday + timedelta(days=6)).strftime("%Y-%m-%d")
     return None
 
+def resolve_reminder_time(text: str, base_dt: datetime = None) -> Optional[str]:
+    """解析口语精确提醒时刻（如 '15分钟后' / '半小时后' / '明天上午9点半' / '今晚8点20'），返回 YYYY-MM-DD HH:MM"""
+    now = base_dt or datetime.now()
+
+    # 1. 相对分钟/小时后
+    if "半小时后" in text or "半个小时后" in text or "半小时之后" in text:
+        return (now + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M")
+
+    m_min = re.search(r"([0-9一二两三四五六七八九十]{1,3})\s*分钟?(?:后|之后|以后)", text)
+    if m_min:
+        mins = parse_cn_int(m_min.group(1))
+        if mins and 1 <= mins <= 1440:
+            return (now + timedelta(minutes=mins)).strftime("%Y-%m-%d %H:%M")
+
+    m_hr = re.search(r"([0-9一二两三四五六七八九十]{1,2})\s*个?小时(?:后|之后|以后)", text)
+    if m_hr:
+        hrs = parse_cn_int(m_hr.group(1))
+        if hrs and 1 <= hrs <= 72:
+            return (now + timedelta(hours=hrs)).strftime("%Y-%m-%d %H:%M")
+
+    # 2. 具体时刻（如 下午3点半 / 明天上午9点 / 20点15分 / 今晚8点）
+    m_tm = re.search(
+        r"(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|今晚|明早|明晚)?\s*"
+        r"([0-9一二两三四五六七八九十]{1,3})\s*(?:点|:|：)\s*"
+        r"(半|一刻|三刻|[0-9一二三四五六七八九十]{1,3})?分?",
+        text,
+    )
+    if m_tm:
+        period = m_tm.group(1) or ""
+        hr = parse_cn_int(m_tm.group(2))
+        mn_raw = m_tm.group(3)
+        if hr is not None and 0 <= hr <= 23:
+            if mn_raw == "半":
+                mn = 30
+            elif mn_raw == "一刻":
+                mn = 15
+            elif mn_raw == "三刻":
+                mn = 45
+            elif mn_raw:
+                mn = parse_cn_int(mn_raw) or 0
+            else:
+                mn = 0
+            if mn > 59:
+                mn = 0
+            if period in ("下午", "傍晚", "晚上", "今晚", "明晚") and 1 <= hr <= 11:
+                hr += 12
+            elif period == "中午" and 1 <= hr <= 5:
+                hr += 12
+            ev_date_str = resolve_relative_date(text, now)
+            if ev_date_str:
+                base_d = datetime.strptime(ev_date_str, "%Y-%m-%d").date()
+            else:
+                base_d = now.date()
+            cand = datetime(base_d.year, base_d.month, base_d.day, hr, mn)
+            if not ev_date_str and cand <= now:
+                cand += timedelta(days=1)
+            return cand.strftime("%Y-%m-%d %H:%M")
+    return None
+
 def init_db():
     with get_db_conn() as conn:
         conn.execute("""
@@ -206,12 +265,18 @@ def init_db():
                 category TEXT NOT NULL DEFAULT '随手记',
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                event_date TEXT DEFAULT NULL
+                event_date TEXT DEFAULT NULL,
+                remind_at TEXT DEFAULT NULL,
+                reminded INTEGER NOT NULL DEFAULT 0
             )
         """)
         cols = [r[1] for r in conn.execute("PRAGMA table_info(memories)").fetchall()]
         if "event_date" not in cols:
             conn.execute("ALTER TABLE memories ADD COLUMN event_date TEXT DEFAULT NULL")
+        if "remind_at" not in cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN remind_at TEXT DEFAULT NULL")
+        if "reminded" not in cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN reminded INTEGER NOT NULL DEFAULT 0")
         rows = conn.execute("SELECT id, content, created_at, event_date FROM memories WHERE event_date IS NULL").fetchall()
         for r in rows:
             try:
@@ -228,16 +293,26 @@ init_db()
 def list_memories(limit: int = 30) -> List[Dict[str, Any]]:
     with get_db_conn() as conn:
         rows = conn.execute(
-            "SELECT id, category, content, created_at, event_date FROM memories ORDER BY id DESC LIMIT ?",
+            "SELECT id, category, content, created_at, event_date, remind_at, reminded FROM memories ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
 
 def get_best_memo_for_screen() -> str:
-    """为 Cardputer 桌面副屏挑选最高价值的一条备忘：优先展示最近未过期的日程待办"""
-    today = datetime.now().date()
+    """为 Cardputer 桌面副屏挑选最高价值的一条备忘：优先展示即将到点的定时提醒，其次最近未过期日程"""
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    today = now.date()
     today_str = today.strftime("%Y-%m-%d")
     with get_db_conn() as conn:
+        rem = conn.execute(
+            "SELECT content, remind_at FROM memories WHERE remind_at IS NOT NULL AND reminded = 0 AND remind_at >= ? ORDER BY remind_at ASC LIMIT 1",
+            (now_str,),
+        ).fetchone()
+        if rem:
+            hm = rem["remind_at"][11:16]
+            return f"⏰{hm} {rem['content']}"[:30]
+
         upcoming = conn.execute(
             "SELECT content, event_date FROM memories WHERE event_date IS NOT NULL AND event_date >= ? ORDER BY event_date ASC, id DESC LIMIT 1",
             (today_str,),
@@ -270,21 +345,24 @@ def sync_memo_sensor_async():
         push_ha_sensor("sensor.ai_legion_memo", get_best_memo_for_screen(), "AI Legion Latest Memo")
     threading.Thread(target=_push, daemon=True).start()
 
-def add_memory(content: str, category: str = "随手记", event_date: str = None) -> Dict[str, Any]:
+def add_memory(content: str, category: str = "随手记", event_date: str = None, remind_at: str = None) -> Dict[str, Any]:
     now = datetime.now()
     now_str = now.strftime("%Y-%m-%d %H:%M")
-    ev = event_date or resolve_relative_date(content, now)
-    if ev and category == "随手记":
+    rem = remind_at or resolve_reminder_time(content, now)
+    ev = event_date or (rem[:10] if rem else resolve_relative_date(content, now))
+    if rem:
+        category = "定时提醒"
+    elif ev and category == "随手记":
         category = "待办提醒"
     with get_db_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO memories (category, content, created_at, event_date) VALUES (?, ?, ?, ?)",
-            (category, content.strip(), now_str, ev),
+            "INSERT INTO memories (category, content, created_at, event_date, remind_at, reminded) VALUES (?, ?, ?, ?, ?, 0)",
+            (category, content.strip(), now_str, ev, rem),
         )
         mid = cur.lastrowid
         conn.commit()
     sync_memo_sensor_async()
-    return {"id": mid, "category": category, "content": content.strip(), "created_at": now_str, "event_date": ev}
+    return {"id": mid, "category": category, "content": content.strip(), "created_at": now_str, "event_date": ev, "remind_at": rem, "reminded": 0}
 
 def delete_memory(mid: int) -> bool:
     with get_db_conn() as conn:
@@ -504,15 +582,31 @@ def load_local_llm(model_id: str):
     if model_id in LOADED_LLMS:
         return LOADED_LLMS[model_id]
     from llama_cpp import Llama
-    print(f"[AI-Legion] Loading GGUF model {meta['name']} from {path} ...")
-    llm = Llama(
-        model_path=path,
-        n_ctx=2048,
-        n_threads=N_THREADS,
-        n_threads_batch=8,
-        n_batch=512,
-        verbose=False,
-    )
+    print(f"[AI-Legion] Loading GGUF model {meta['name']} from {path} (CPU Fast n_ctx=1024 + Q8_0 KV) ...")
+    try:
+        llm = Llama(
+            model_path=path,
+            n_ctx=1024,
+            n_threads=N_THREADS,
+            n_threads_batch=8,
+            n_batch=256,
+            flash_attn=False,
+            type_k=8,
+            type_v=8,
+            use_mmap=True,
+            use_mlock=False,
+            verbose=False,
+        )
+    except Exception as e:
+        print(f"[AI-Legion] Q8 KV fallback ({e}), loading default...")
+        llm = Llama(
+            model_path=path,
+            n_ctx=1024,
+            n_threads=N_THREADS,
+            n_threads_batch=8,
+            n_batch=256,
+            verbose=False,
+        )
     LOADED_LLMS[model_id] = llm
     ensure_model_stats(model_id)
     return llm
@@ -740,6 +834,53 @@ def notify_cardputer_alert(title: str, message: str):
         return resp.status_code == 200, resp.text[:120]
     except Exception as e:
         return False, str(e)
+
+def announce_cardputer_voice(message: str):
+    """通过 HA assist_satellite.announce 主动唤醒 Cardputer 开口语音播报提醒"""
+    if not HA_TOKEN:
+        return False, "HA_TOKEN not configured"
+    try:
+        headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
+        resp = httpx.post(
+            f"{HA_URL}/api/services/assist_satellite/announce",
+            headers=headers,
+            json={
+                "entity_id": os.getenv("CARDPUTER_SATELLITE_ID", "assist_satellite.m5cardputer_assist_satellite"),
+                "message": message[:120],
+            },
+            timeout=6.0,
+        )
+        return resp.status_code == 200, resp.text[:120]
+    except Exception as e:
+        return False, str(e)
+
+def reminder_watcher():
+    """后台定时提醒守夜线程（每 5 秒检查一次 SQLite，到点自动亮屏弹窗 + 主动语音播报）"""
+    while True:
+        try:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            due_rows = []
+            with get_db_conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, content, remind_at FROM memories WHERE remind_at IS NOT NULL AND reminded = 0 AND remind_at <= ?",
+                    (now_str,),
+                ).fetchall()
+                for r in rows:
+                    due_rows.append(dict(r))
+                    conn.execute("UPDATE memories SET reminded = 1 WHERE id = ?", (r["id"],))
+                if due_rows:
+                    conn.commit()
+            for item in due_rows:
+                msg = item["content"]
+                notify_cardputer_alert("到点提醒", msg)
+                announce_cardputer_voice(f"提醒时间到了，{msg}")
+                record_telemetry("定时提醒引擎", "Cardputer-Adv", "到点亮屏+语音提醒", item["remind_at"], msg, 15.0)
+                sync_memo_sensor_async()
+        except Exception as e:
+            print(f"[Reminder] watcher error: {e}")
+        time.sleep(5)
+
+threading.Thread(target=reminder_watcher, daemon=True).start()
 
 # ── 后台定时推送边缘主机算力指标与最优待办到 HA + 异常主动守夜 ───────────────────
 def ha_telemetry_pusher():
@@ -1032,13 +1173,60 @@ def handle_voice_query_sync(
         record_telemetry(source, "L0-Ops", "HomeLab 语音查房", q, reply, lat)
         return {"voice_summary": reply, "result": reply, "model_id": "L0-Ops", "latency_ms": lat}
 
-    # ===== L1-A：离线“家庭第二大脑”写入（自动将相对日期锚定为绝对日期） =====
+    # ===== L1-A：离线“家庭第二大脑”写入 & 到点主动亮屏/语音提醒 =====
+    # 1) 精确秒级倒计时提醒（如“30秒后提醒我关火”）
+    sec_rem_m = re.search(r"([0-9一二两三四五六七八九十]{1,3})\s*秒钟?(?:后|之后|以后)?.*?(?:提醒我|叫我|喊我)[：:，,\s]*(.+)$", q)
+    if sec_rem_m:
+        secs = parse_cn_int(sec_rem_m.group(1)) or 10
+        rem_content = sec_rem_m.group(2).strip("。！!？? ")
+        def _sec_alert(s=secs, msg=rem_content):
+            ev = threading.Event()
+            tid = int(time.time() * 1000) % 1000000
+            entry = {"id": tid, "desc": f"定时提醒:{msg[:18]}", "created_at": datetime.now().strftime("%H:%M:%S"), "cancel_event": ev}
+            with TIMERS_LOCK:
+                PENDING_TIMERS.append(entry)
+            try:
+                if not ev.wait(timeout=min(float(s), 3600.0)):
+                    notify_cardputer_alert("到点提醒", msg)
+                    announce_cardputer_voice(f"提醒时间到了，{msg}")
+                    record_telemetry("定时提醒引擎", "Cardputer-Adv", "秒级倒计时提醒", f"{s}秒后", msg, 15.0)
+            finally:
+                with TIMERS_LOCK:
+                    if entry in PENDING_TIMERS:
+                        PENDING_TIMERS.remove(entry)
+        threading.Thread(target=_sec_alert, daemon=True).start()
+        reply = f"好的，已设定 {secs} 秒后主动亮屏并语音提醒你：{rem_content}"
+        lat = (time.time() - start_t) * 1000
+        append_recent_turn(source, q, reply)
+        record_telemetry(source, "L1-Reminder", "秒级定时提醒设定", q, reply, lat)
+        return {"voice_summary": reply, "result": reply, "model_id": "L1-Reminder", "latency_ms": lat}
+
+    # 2) 前置时间定时提醒（如“15分钟后提醒我关火” / “明天上午9点提醒我开会”）
+    pre_rem_m = re.match(r"^(?:请)?(?:帮我)?(.+?)(?:提醒我|叫我|通知我)[：:，,\s]*(.+)$", q)
+    if pre_rem_m and not any(w in q for w in ("有什么提醒", "查一下提醒", "删掉", "删除", "取消")):
+        rem_at = resolve_reminder_time(q)
+        if rem_at:
+            rem_content = pre_rem_m.group(2).strip("。！!？? ")
+            item = add_memory(rem_content, category="定时提醒", remind_at=rem_at)
+            dt_obj = datetime.strptime(rem_at, "%Y-%m-%d %H:%M")
+            day_lbl = "今天" if dt_obj.date() == datetime.now().date() else ("明天" if dt_obj.date() == (datetime.now().date() + timedelta(days=1)) else f"{dt_obj.month}月{dt_obj.day}日")
+            reply = f"好的，已设定{day_lbl} {dt_obj.hour}点{dt_obj.minute:02d}分 主动亮屏并语音提醒你：{rem_content}"
+            lat = (time.time() - start_t) * 1000
+            append_recent_turn(source, q, reply)
+            record_telemetry(source, "L1-Reminder", f"持久定时提醒 ({rem_at})", q, reply, lat)
+            return {"voice_summary": reply, "result": reply, "model_id": "L1-Reminder", "latency_ms": lat, "memory": item}
+
+    # 3) 标准随手记写入（支持附带日期或精确时刻）
     mem_add_match = re.match(r"^(?:请)?(?:帮我)?(?:记一下|记住|备忘|记录一下|记入随手记|提醒我)[：:，,\s]*(.+)$", q)
     if mem_add_match:
         content = mem_add_match.group(1).strip()
         cat = "物品位置" if any(w in content for w in ("放在", "停在", "抽屉", "柜子", "车位")) else "随手记"
         item = add_memory(content, category=cat)
-        if item.get("event_date"):
+        if item.get("remind_at"):
+            dt_obj = datetime.strptime(item["remind_at"], "%Y-%m-%d %H:%M")
+            day_lbl = "今天" if dt_obj.date() == datetime.now().date() else f"{dt_obj.month}月{dt_obj.day}日"
+            reply = f"好的，已设定{day_lbl} {dt_obj.hour}点{dt_obj.minute:02d}分 主动提醒：{content}"
+        elif item.get("event_date"):
             ev_d = datetime.strptime(item["event_date"], "%Y-%m-%d").date()
             wd = CN_WEEKDAY_NAMES[ev_d.weekday()]
             reply = f"好的，已记入{ev_d.month}月{ev_d.day}日{wd}待办：{content}"
@@ -1222,19 +1410,23 @@ def handle_voice_query_sync(
             "latency_ms": lat,
         }
 
-    # ===== L3：事实锚定型多轮自然语言对话（自动挂载真实随手记快照，100% 杜绝瞎编个人日程） =====
+    # ===== L3：事实锚定型多轮自然语言对话（按需挂载随手记，兼顾 3s 极速响应与零个人幻觉） =====
     today = datetime.now().date()
     wd_now = CN_WEEKDAY_NAMES[today.weekday()]
-    hist = get_recent_history(source, incoming_messages, max_turns=6)
-    mem_snapshot = build_grounding_memories_snippet(limit=8)
-    sys_prompt = (
-        f"你是运行在家庭边缘主机 {HOST_NAME} 上的纯离线语音管家。今天是 {today.strftime('%Y年%m月%d日')} {wd_now}。\n"
-        "【最高事实铁律】\n"
-        "1. 下方【真实本地随手记】是用户唯一的个人日程、活计、活动、物品位置与备忘来源。\n"
-        "2. 凡涉及用户个人的安排、任务、曾说过的话，必须100%严格依据【真实本地随手记】回答！列表里没有的事项必须直接说“你的随手记里没有这项记录”，严禁根据日常生活猜测或编造任何任务（严禁编造洗车、做家务、陪家人吃饭等虚假内容）！\n"
-        "3. 严禁编造实时联网资讯或天气，用简短自然的纯口语中文回答（不超过45字），不输出 Markdown 符号。\n"
-        f"【真实本地随手记】\n{mem_snapshot}"
-    )
+    hist = get_recent_history(source, incoming_messages, max_turns=4)
+    need_mem_grounding = any(w in q for w in ("我", "咱", "今天", "明天", "后天", "周", "最近", "记", "说过", "忘", "哪", "事", "活", "忙"))
+    if need_mem_grounding:
+        mem_snapshot = build_grounding_memories_snippet(limit=5)
+        sys_prompt = (
+            f"你是纯离线中文语音管家，今天{today.strftime('%Y-%m-%d')} {wd_now}。"
+            "涉及个人日程/活计/说过的话时严格依据下方随手记，无记录就直说“随手记里没有”，绝不编造；"
+            f"其他问题简短口语答复(40字内)。\n【随手记】\n{mem_snapshot}"
+        )
+    else:
+        sys_prompt = (
+            f"你是纯离线中文语音管家，今天{today.strftime('%Y-%m-%d')} {wd_now}。"
+            "若要求扫描网络或查实时联网信息，直说纯离线模式无法扫描或联网；否则用简短自然口语回答(40字内)，不编造事实。"
+        )
     res = run_llm_sync(
         sys_prompt, q, model_id=primary, enable_thinking=force_think,
         max_tokens=380 if force_think else 90, temperature=0.2, history=hist
@@ -1480,9 +1672,9 @@ def index():
     if os.path.exists(html_file):
         with open(html_file, "r", encoding="utf-8") as f:
             return f.read()
-    return "<h1>AI Legion v2.3 Mission Control</h1>"
+    return "<h1>AI Legion v2.6 Mission Control</h1>"
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"[AI-Legion v2.3] Starting on port {PORT} | Host: {HOST_NAME} | Primary: {get_default_primary_id()}")
+    print(f"[AI-Legion v2.6] Starting on port {PORT} | Host: {HOST_NAME} | Primary: {get_default_primary_id()}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)

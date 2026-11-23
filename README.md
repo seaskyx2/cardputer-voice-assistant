@@ -25,7 +25,7 @@
        │
        ├──> Wyoming-Whisper (10300 端口): 本地语音转文字 (STT)
        │
-       ├──> AI-Legion v2.0 网关 & 算力控制塔 (8096 端口): L0 极速规则 + 离线 SQLite 记忆库 + 异步时序调度
+       ├──> AI-Legion v2.6 网关 & 算力控制塔 (8096 端口): L0 极速控家 + 离线第二大脑(可记/可查/可销/到点亮屏语音提醒) + 可取消延时队列
        │        └──> Ollama / llama.cpp (11434 端口): Qwen3-4B (/no_think 极速控家 + /think 深度推理)
        │
        └──> Wyoming-Piper (10200 端口): 本地中文语音合成 (TTS, 华严女声 16kHz)
@@ -87,8 +87,8 @@ docker exec -it ollama ollama pull qwen3:4b
 
 容器启动完成后，各项服务监听的端口如下：
 - Home Assistant：`8123`
-- AI-Legion v2.0 算力控制塔主页 & 网关：`8096`（浏览器访问 `http://<服务器IP>:8096`）
-- Wyoming-Whisper (STT)：`10300`
+- AI-Legion v2.6 算力控制塔主页 & 网关：`8096`（浏览器访问 `http://<服务器IP>:8096`）
+- Wyoming-SenseVoice (100ms 极速中文 STT)：`10300`
 - Wyoming-Piper (TTS)：`10200`
 - Ollama：`11434`
 
@@ -107,14 +107,14 @@ docker exec -it ollama ollama pull qwen3:4b
    docker restart ai-legion
    ```
 
-#### 2. 接入语音转文字 (Whisper) 与语音合成 (Piper)
-> 注意：使用默认 Docker Compose（桥接网络）时，下方主机名请直接填写容器服务名（`whisper`、`piper`、`ai-legion`）；仅当你手动开启了 `network_mode: host` 或在宿主机直接部署时，才填写 `127.0.0.1`。
+#### 2. 接入语音转文字 (SenseVoice) 与语音合成 (Piper)
+> 注意：使用默认 Docker Compose（桥接网络）时，下方主机名请直接填写容器服务名（`sensevoice`、`piper`、`ai-legion`）；仅当你手动开启了 `network_mode: host` 或在宿主机直接部署时，才填写 `127.0.0.1`。
 
 1. 在 Home Assistant 中进入 **设置** -> **设备与服务** -> 点击右下角 **添加集成**。
 2. 搜索并选择 **Wyoming**：
-   - 主机 (Host)：输入 `whisper`（Host 模式填 `127.0.0.1`）
+   - 主机 (Host)：输入 `sensevoice`（Host 模式填 `127.0.0.1`）
    - 端口 (Port)：输入 `10300`
-   - 提交后自动识别出 `faster-whisper` 中文语音识别服务。
+   - 提交后自动识别出 `sensevoice` 极速中文语音识别服务。
 3. 再次点击右下角 **添加集成**，搜索并选择 **Wyoming**：
    - 主机：输入 `piper`（Host 模式填 `127.0.0.1`）
    - 端口：输入 `10200`
@@ -131,7 +131,7 @@ docker exec -it ollama ollama pull qwen3:4b
    - **名称**：`Cardputer 离线流水线`
    - **语言**：`中文 (Chinese)`
    - **对话代理 (Conversation Agent)**：选择刚刚添加的 **Ollama (qwen3-4b)**
-   - **语音转文字 (STT)**：选择 **faster-whisper**
+   - **语音转文字 (STT)**：选择 **sensevoice**
    - **文字转语音 (TTS)**：选择 **piper (zh_CN-huayan-medium)**
 3. 保存后，将该流水线设为**首选 (Preferred)**。
 
@@ -202,9 +202,10 @@ wifi_password: "你的WiFi密码"
 
 * **设备开关 (L0 极速规则 <10ms)**：“把吸顶灯打开”、“把风扇关掉”
 * **异步多步时序动作 (Qwen3 调度，0 阻塞不超时)**：“把灯打开过5秒再关上”、“把指示灯关闭，3秒后再打开”
-* **离线家庭第二大脑 (SQLite 私有记忆库)**：“记一下，车停在 B2-048”、“记一下，社保卡放在书房第二个抽屉” -> 随时问：“我车停在哪”、“我社保卡放哪了”
+* **离线家庭第二大脑 & 到点主动提醒 (SQLite)**：“记一下，这周日有人来装灯”、“15分钟后提醒我关火”、“明天上午9点半提醒我开会” -> 支持自然口语查询、**语音销账删除**（“把装灯的备忘删掉”），以及**到点自动亮屏弹窗 + 开口语音提醒**
+* **可取消延时控家**：“过30秒关闭路由器指示灯”，随时可喊 **“取消定时”** 立即中止
 * **HomeLab 语音查房 (L0 Ops)**：“服务器状态怎么样”、“家里网速怎么样”、“现在几点了”
-* **算力控制塔 Web 面板**：局域网浏览器访问 `http://<服务器IP>:8096`，零外链纯离线查看主机 CPU/内存、模型在盘与常驻状态、切换主力模型、管理本地记忆库与实时遥测日志。
+* **算力控制塔 Web 面板**：局域网浏览器访问 `http://<服务器IP>:8096`，零外链纯离线查看主机 CPU/内存、模型常驻状态、活跃倒计时队列、定时提醒管理与实时遥测日志。
 
 ---
 
@@ -233,15 +234,15 @@ wifi_password: "你的WiFi密码"
 ```
 .
 ├── esphome/
-│   ├── m5cardputer-adv.yaml       # ESPHome 核心配置（三模式真实数据仪表盘、零缺字中文字模、息屏停刷节能）
+│   ├── m5cardputer-adv.yaml       # ESPHome 核心配置（五屏交互、mipi_spi 高速屏驱、硬件看门狗防卡死、零缺字字模）
 │   ├── secrets.yaml.example       # Wi-Fi 与 API 秘钥模板
-│   ├── visualizer.h               # 麦克风 RMS 能量采样、UTF-8 安全折行与 Wi-Fi 射频折线缓存
+│   ├── visualizer.h               # 麦克风 RMS 波形、BMI270 手势与自适应水平仪解算、UTF-8 安全截断
 │   └── custom_components/         # TCA8418 键盘矩阵驱动
 ├── server/
-│   ├── docker-compose.yml         # 服务端核心编排文件 (跨平台端口映射)
+│   ├── docker-compose.yml         # 服务端核心编排文件 (Home Assistant + SenseVoice + Piper + Ollama + AI-Legion)
 │   ├── init_server.sh             # 服务端一键引导启动脚本 (默认拉取 qwen3:4b)
-│   ├── .env.example               # 环境变量模板 (填入 HA_TOKEN 与 DEFAULT_MODEL)
-│   └── ai-legion/                 # AI Legion v2.0 动作调度网关、SQLite 第二大脑与零外链算力控制塔主页
+│   ├── .env.example               # 环境变量模板 (填入 HA_TOKEN 与可选 LEGION_API_TOKEN)
+│   └── ai-legion/                 # AI Legion v2.6 控制塔、防幻觉第二大脑与到点主动语音提醒引擎
 └── docs/
     ├── HARDWARE_GUIDE.md          # Cardputer-Adv 硬件避坑与 DAC / 按键真值详解
     ├── ARCHITECTURE.md            # 系统拓扑与 5 阶段状态机图解

@@ -40,11 +40,12 @@ struct ImuGestureTracker {
   float lvl_ax = 0.0f;
   float lvl_ay = 0.0f;
   float lvl_az = 1.0f;
-  // 相对归零校准偏移量 (Tare / Zeroing)
+  // 相对归零校准偏移量 (Tare / Zeroing) 与姿态迟滞防抖状态
   bool zero_enabled = false;
   float zero_roll = 0.0f;
   float zero_pitch = 0.0f;
   float zero_edge = 0.0f;
+  bool flat_mode_state = true;
 
   bool initialized = false;
   int face_down_cnt = 0;
@@ -57,6 +58,7 @@ struct ImuGestureTracker {
     if (!initialized) {
       ax = nx; ay = ny; az = nz;
       lvl_ax = nx; lvl_ay = ny; lvl_az = nz;
+      flat_mode_state = (std::abs(nz) > 0.50f);
       initialized = true;
       return 0;
     }
@@ -68,6 +70,14 @@ struct ImuGestureTracker {
     lvl_ax = lvl_ax * 0.72f + nx * 0.28f;
     lvl_ay = lvl_ay * 0.72f + ny * 0.28f;
     lvl_az = lvl_az * 0.72f + nz * 0.28f;
+
+    // 迟滞防抖区间 (0.44g / 0.56g)，彻底消除 60° 临界角模式闪烁
+    float abs_z = std::abs(lvl_az);
+    if (flat_mode_state && abs_z < 0.44f) {
+      flat_mode_state = false;
+    } else if (!flat_mode_state && abs_z > 0.56f) {
+      flat_mode_state = true;
+    }
 
     // 手势 1：屏幕朝下翻扣桌面 (az < -0.78g 连续 5 次采样 ≈ 400ms @ 80ms interval)
     if (az < -0.78f) {
@@ -125,7 +135,7 @@ struct ImuGestureTracker {
   float get_roll_deg() const { return raw_roll_deg() - (zero_enabled ? zero_roll : 0.0f); }
   float get_pitch_deg() const { return raw_pitch_deg() - (zero_enabled ? zero_pitch : 0.0f); }
   float get_edge_deg() const { return raw_edge_deg() - (zero_enabled ? zero_edge : 0.0f); }
-  bool is_flat_mode() const { return std::abs(lvl_az) > 0.50f; }
+  bool is_flat_mode() const { return flat_mode_state; }
   bool is_plumb_mode() const { return !is_flat_mode() && (std::abs(lvl_ax) > std::abs(lvl_ay)); }
 };
 static ImuGestureTracker imu_tracker;

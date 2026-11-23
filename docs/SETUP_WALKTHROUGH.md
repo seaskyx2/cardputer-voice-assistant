@@ -37,13 +37,13 @@ cd cardputer-voice-assistant/server
    ```
 
 ### 步骤 2.2：接入 STT 与 TTS (Wyoming 协议)
-> 注意：Docker Compose 默认桥接模式下，主机名请填写容器服务名（`whisper`、`piper`、`ai-legion`）；若手动启用了 `network_mode: host` 或宿主机直接部署，则填 `127.0.0.1`。
+> 注意：Docker Compose 默认桥接模式下，主机名请填写容器服务名（`sensevoice`、`piper`、`ai-legion`）；若手动启用了 `network_mode: host` 或宿主机直接部署，则填 `127.0.0.1`。
 
 1. 进入 **设置 (Settings)** -> **设备与服务 (Devices & Services)** -> 点击右下角 **添加集成 (Add Integration)**。
 2. 搜索并选择 **Wyoming**：
-   * **主机 (Host)**：输入 `whisper`（Host 模式填 `127.0.0.1`）
+   * **主机 (Host)**：输入 `sensevoice`（Host 模式填 `127.0.0.1`）
    * **端口 (Port)**：输入 `10300`
-   * 点击提交，系统自动识别出 `faster-whisper` 中文语音转文字服务。
+   * 点击提交，系统自动识别出 `sensevoice` 极速中文语音转文字服务。
 3. 再次点击右下角 **添加集成** -> 搜索并选择 **Wyoming**：
    * **主机**：输入 `piper`（Host 模式填 `127.0.0.1`）
    * **端口**：输入 `10200`
@@ -51,7 +51,7 @@ cd cardputer-voice-assistant/server
 
 ### 步骤 2.3：接入智能家居动作调度大模型 (Ollama 集成)
 1. 在 **设备与服务** 页面，点击右下角 **添加集成** -> 搜索并选择 **Ollama**。
-2. **服务器地址**：输入 `http://ai-legion:8096`（Host 模式填 `http://127.0.0.1:8096`，指向 AI Legion v2.0 动作调度网关）。
+2. **服务器地址**：输入 `http://ai-legion:8096`（Host 模式填 `http://127.0.0.1:8096`，指向 AI Legion v2.6 动作调度网关）。
 3. 模型选择 `qwen3-4b:latest` 并提交。
 
 ### 步骤 2.4：创建离线对讲语音流水线 (Voice Assistant Pipeline)
@@ -60,7 +60,7 @@ cd cardputer-voice-assistant/server
    * **名称**：`Cardputer 离线流水线`
    * **语言**：`中文 (Chinese)`
    * **对话代理 (Conversation Agent)**：选择刚刚添加的 **Ollama (qwen3-4b)**
-   * **语音转文字 (STT)**：选择 **faster-whisper**
+   * **语音转文字 (STT)**：选择 **sensevoice**
    * **文字转语音 (TTS)**：选择 **piper (zh_CN-huayan-medium)**
 3. 点击完成，并将该流水线设为 **首选 (Preferred)**。
 

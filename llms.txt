@@ -3,8 +3,8 @@
 
 ## Project Summary
 - Repository: https://github.com/seaskyx2/cardputer-voice-assistant
-- Hardware Target: M5Stack Cardputer-Adv (ESP32-S3 Stamp-S3A, TI TCA8418 I2C Keypad, ES8311 I2S DAC, NS4150B Analog Amp, ST7789V 135x240 LCD, MEMS Mic)
-- Ecosystem: Home Assistant Core, ESPHome, Wyoming Faster-Whisper (STT), Wyoming Piper (TTS), Ollama / llama.cpp (Qwen3-4B dual-mode `/no_think` + `/think`), AI-Legion v2.0 Tool Gateway + Offline SQLite Memory DB + Zero-CDN Web Dashboard.
+- Hardware Target: M5Stack Cardputer-Adv (ESP32-S3 Stamp-S3A, TI TCA8418 I2C Keypad, ES8311 I2S DAC, NS4150B Analog Amp, BMI270 6-Axis IMU, ST7789V 135x240 LCD via mipi_spi, MEMS Mic)
+- Ecosystem: Home Assistant Core, ESPHome, Wyoming SenseVoiceSmall INT8 (100ms CPU STT), Wyoming Piper (TTS), Ollama / llama.cpp (Qwen3-4B dual-mode `/no_think` + `/think`), AI-Legion v2.6 Tool Gateway + Offline SQLite Memory & Active Voice Reminder Engine + Zero-CDN Web Dashboard.
 - Privacy & Topology: 100% LAN local autonomy, zero cloud reliance.
 
 ## Resolved Hardware & Architectural Pitfalls

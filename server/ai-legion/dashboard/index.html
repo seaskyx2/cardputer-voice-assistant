@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Legion v2.3 · 端侧算力控制塔</title>
+  <title>AI Legion v2.6 · 端侧算力控制塔</title>
   <style>
     :root {
       --bg: #070b14;
@@ -160,7 +160,7 @@
         <div class="logo">AI</div>
         <div>
           <h1>
-            AI Legion v2.3 算力控制塔
+            AI Legion v2.6 算力控制塔
             <span class="badge badge-green">100% 离线实测数据</span>
           </h1>
           <p id="host-desc">边缘主机 · 端侧小模型集群 + 家庭第二大脑 + Home Assistant 总线</p>
@@ -214,11 +214,16 @@
       </div>
       <div class="quick-pills">
         <span class="quick-pill" onclick="fillAndRun('现在几点了')">现在几点了 (L0)</span>
-        <span class="quick-pill" onclick="fillAndRun('服务器状态怎么样')">服务器状态怎么样 (L0 Ops)</span>
-        <span class="quick-pill" onclick="fillAndRun('记一下，社保卡放在书房第二个抽屉')">写入记忆：社保卡位置 (L1)</span>
-        <span class="quick-pill" onclick="fillAndRun('我社保卡放哪了')">召回记忆：社保卡在哪 (L1 RAG)</span>
-        <span class="quick-pill" onclick="fillAndRun('把小米指示灯关闭，过3秒再打开')">异步时序控家 (L2 Qwen3)</span>
+        <span class="quick-pill" onclick="fillAndRun('服务器状态怎么样')">服务器状态 (L0 Ops)</span>
+        <span class="quick-pill" onclick="fillAndRun('1分钟后提醒我喝水')">1分钟后提醒喝水 (亮屏+语音)</span>
+        <span class="quick-pill" onclick="fillAndRun('我今天有什么活要干')">查今日待办 (L1 RAG)</span>
+        <span class="quick-pill" onclick="fillAndRun('过30秒关闭小米指示灯')">延时控家 (L0 Timer)</span>
+        <span class="quick-pill" onclick="fillAndRun('取消定时')">取消倒计时</span>
         <span class="quick-pill" style="border-color:rgba(245,158,11,.45); color:var(--yellow);" onclick="pushCardputer()">⚡ 反向唤醒 Cardputer 弹窗</span>
+      </div>
+      <div id="timer-bar" style="display:none; margin-top:10px; padding:8px 12px; border-radius:8px; background:rgba(245,158,11,.10); border:1px solid rgba(245,158,11,.35); align-items:center; justify-content:space-between; gap:10px; font-size:12px;">
+        <div id="timer-bar-text" style="color:var(--yellow);">⏱️ 活跃延时任务...</div>
+        <button class="btn btn-danger" style="padding:3px 10px; font-size:11px;" onclick="cancelTimers()">一键取消全部</button>
       </div>
       <div class="console-out" id="console-out">等待指令输入...</div>
     </section>
@@ -285,8 +290,16 @@
         const d = await fetchJSON('/api/system');
         if (d.host_name) {
           currentHostName = d.host_name;
-          document.title = `AI Legion v2.3 · ${d.host_name} 端侧算力控制塔`;
+          document.title = `AI Legion v2.6 · ${d.host_name} 端侧算力控制塔`;
           document.getElementById('host-desc').textContent = `${d.host} · 端侧小模型集群 + 家庭第二大脑 + Home Assistant 总线`;
+        }
+        const tb = document.getElementById('timer-bar');
+        const timers = d.pending_timers || [];
+        if (timers.length > 0) {
+          tb.style.display = 'flex';
+          document.getElementById('timer-bar-text').textContent = `⏱️ 运行中倒计时 (${timers.length}): ` + timers.map(t => `[${t.created_at}] ${t.desc}`).join(' | ');
+        } else {
+          tb.style.display = 'none';
         }
         document.getElementById('m-cpu').textContent = d.cpu_percent + '%';
         document.getElementById('m-ram').textContent = `${d.used_ram_gb} / ${d.total_ram_gb} GB (${d.ram_percent}%)`;
@@ -364,7 +377,7 @@
         el.innerHTML = list.map(m => `
           <div class="item-box">
             <div class="item-top">
-              <div><span class="badge badge-cyan" style="margin-right:6px;">${m.category}</span>${m.event_date ? `<span class="badge badge-yellow" style="margin-right:6px;">📅 ${m.event_date}</span>` : ''}<span style="font-size:13px;">${m.content}</span></div>
+              <div><span class="badge badge-cyan" style="margin-right:6px;">${m.category}</span>${m.remind_at ? `<span class="badge ${m.reminded ? 'badge-gray' : 'badge-red'}" style="margin-right:6px;">⏰ ${m.remind_at}${m.reminded ? ' (已提醒)' : ''}</span>` : (m.event_date ? `<span class="badge badge-yellow" style="margin-right:6px;">📅 ${m.event_date}</span>` : '')}<span style="font-size:13px;">${m.content}</span></div>
               <button class="btn btn-danger" style="padding:2px 8px; font-size:11px;" onclick="delMem(${m.id})">删除</button>
             </div>
             <div class="item-meta"><span>记录时间: ${m.created_at}</span></div>
@@ -387,8 +400,14 @@
     }
 
     async function delMem(id) {
-      await fetch(`/api/memories/${id}`, { method: 'DELETE' });
+      await fetchJSON(`/api/memories/${id}`, { method: 'DELETE' });
       loadMemories();
+    }
+
+    async function cancelTimers() {
+      await fetchJSON('/api/timers/cancel', { method: 'POST' });
+      loadSystem();
+      loadTelemetry();
     }
 
     async function loadDevices() {
