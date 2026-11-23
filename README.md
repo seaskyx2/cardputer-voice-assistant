@@ -234,7 +234,7 @@ wifi_password: "你的WiFi密码"
 ```
 .
 ├── esphome/
-│   ├── m5cardputer-adv.yaml       # ESPHome 核心配置（五屏交互、mipi_spi 高速屏驱、硬件看门狗防卡死、零缺字字模）
+│   ├── m5cardputer-adv.yaml       # ESPHome 核心配置（五屏交互、硬件看门狗防卡死、零缺字中文字模、息屏节能）
 │   ├── secrets.yaml.example       # Wi-Fi 与 API 秘钥模板
 │   ├── visualizer.h               # 麦克风 RMS 波形、BMI270 手势与自适应水平仪解算、UTF-8 安全截断
 │   └── custom_components/         # TCA8418 键盘矩阵驱动

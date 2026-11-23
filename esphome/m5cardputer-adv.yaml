@@ -77,9 +77,6 @@ api:
             id(is_sleeping) = false;
             id(is_dimmed) = false;
             id(disp_backlight)->turn_on().set_brightness(1.0f).perform();
-            if (id(va_state) == 0 && (title.find("提醒") != std::string::npos || title.find("告警") != std::string::npos)) {
-              visualizer::play_chime_dingdong(id(echo_speaker));
-            }
             id(m5display).update();
   on_client_connected:
     - lambda: |-
@@ -535,21 +532,13 @@ spi:
   miso_pin: GPIO39
 
 display:
-  platform: mipi_spi
-  model: ST7789V
+  platform: st7789v
+  model: TTGO TDisplay 135x240
   id: m5display
   cs_pin: GPIO37
   dc_pin: GPIO34
   reset_pin: GPIO33
-  dimensions:
-    width: 135
-    height: 240
-    offset_width: 52
-    offset_height: 40
-  color_order: BGR
-  invert_colors: true
   rotation: 90
-  data_rate: 40MHz
   update_interval: 100ms
   lambda: |-
     // 0. 硬件级状态机防卡死看门狗 (彻底杜绝任何网络抖动或异常导致的永久卡死)
