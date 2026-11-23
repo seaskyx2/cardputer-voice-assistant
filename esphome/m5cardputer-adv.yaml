@@ -524,7 +524,7 @@ motion:
     accelerometer_odr: 50HZ
     gyroscope_range: 125DPS
     gyroscope_odr: 25HZ
-    update_interval: 80ms
+    update_interval: 100ms
 
 spi:
   clk_pin: GPIO36
@@ -1165,6 +1165,7 @@ light:
     output: backlight_pwm
     name: "Cardputer Screen Backlight"
     id: disp_backlight
+    default_transition_length: 0s
     restore_mode: ALWAYS_ON
 
 text_sensor:

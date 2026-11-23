@@ -22,7 +22,6 @@ void TCA8418Keypad::setup() {
   if (this->interrupt_pin_ != nullptr) {
     this->interrupt_pin_->setup();
     this->interrupt_pin_->pin_mode(gpio::FLAG_INPUT | gpio::FLAG_PULLUP);
-    this->disable_loop();
   }
 
   const size_t key_slots = static_cast<size_t>(this->rows_) * this->columns_;
@@ -38,81 +37,77 @@ void TCA8418Keypad::setup() {
 
   if (this->interrupt_pin_ != nullptr) {
     this->interrupt_pin_->attach_interrupt(&TCA8418Keypad::gpio_intr_, this, gpio::INTERRUPT_FALLING_EDGE);
-    // INT is active-low/open-drain; if already low, no falling edge will occur.
     if (!this->interrupt_pin_->digital_read()) {
       this->interrupt_pending_ = true;
-      this->enable_loop();
     }
-    ESP_LOGI(TAG, "Interrupt enabled on pin %d", this->interrupt_pin_->get_pin());
+    ESP_LOGI(TAG, "Interrupt + level-guard enabled on pin %d", this->interrupt_pin_->get_pin());
   }
 }
 
 void TCA8418Keypad::loop() {
+  const uint32_t now = millis();
   if (this->interrupt_pin_ != nullptr) {
-    if (!this->interrupt_pending_) {
+    // 1. 0ns 本地 GPIO 电平检查 + 边沿中断标志（彻底根除边沿丢失与 disable_loop 死锁）
+    const bool pin_active_low = !this->interrupt_pin_->digital_read();
+    const bool watchdog_due = (uint32_t)(now - this->last_watchdog_poll_ms_) >= 250;
+    if (!this->interrupt_pending_ && !pin_active_low && !watchdog_due) {
       return;
     }
+    this->last_watchdog_poll_ms_ = now;
     this->process_events_();
-    if (!this->interrupt_pending_) {
-      this->disable_loop();
-    }
     return;
   }
-  // Polling mode: check for queued events each loop iteration.
-  this->process_events_();
+  if ((uint32_t)(now - this->last_watchdog_poll_ms_) >= 20) {
+    this->last_watchdog_poll_ms_ = now;
+    this->process_events_();
+  }
 }
-
 
 void TCA8418Keypad::process_events_() {
   this->interrupt_pending_ = false;
 
-  uint8_t int_stat = 0;
-  if (!this->read_byte(REG_INT_STAT, &int_stat)) {
-    ESP_LOGW(TAG, "Unable to read interrupt status");
-    this->status_set_warning();
-    return;
-  }
+  // 先在微秒内一次性抽干 TCA8418 硬件 FIFO 到本地栈缓存，立即清中断释放 GPIO11，
+  // 绝不在 FIFO 未清空前执行耗时的 UI 刷新回调（防止 Release 事件卡死 K_INT 低电平）
+  uint8_t queued[24];
+  size_t queued_len = 0;
 
-  if ((int_stat & 0x01) == 0) {
-    return;
-  }
-
-  uint8_t key_lck_ec = 0;
-  if (!this->read_byte(REG_KEY_LCK_EC, &key_lck_ec)) {
-    ESP_LOGW(TAG, "Unable to read key event count");
-    this->status_set_warning();
-    return;
-  }
-
-  const uint8_t event_count = key_lck_ec & 0x0F;
-  const uint8_t read_count = std::min<uint8_t>(event_count, 10);
-
-  for (uint8_t i = 0; i < read_count; i++) {
-    uint8_t event = 0;
-    if (!this->read_byte(REG_KEY_EVENT_A + i, &event)) {
-      ESP_LOGW(TAG, "Unable to read key event %u", i);
-      this->status_set_warning();
+  for (int round = 0; round < 3; round++) {
+    uint8_t key_lck_ec = 0;
+    if (!this->read_byte(REG_KEY_LCK_EC, &key_lck_ec)) {
+      return;
+    }
+    const uint8_t event_count = key_lck_ec & 0x0F;
+    if (event_count == 0) {
       break;
     }
-
-    if ((event & 0x7F) == 0) {
-      continue;
+    const uint8_t to_read = std::min<uint8_t>(event_count, 10);
+    for (uint8_t i = 0; i < to_read; i++) {
+      uint8_t ev = 0;
+      if (!this->read_byte(REG_KEY_EVENT_A, &ev)) {
+        break;
+      }
+      if ((ev & 0x7F) != 0 && queued_len < sizeof(queued)) {
+        queued[queued_len++] = ev;
+      }
     }
-
-    this->handle_event_(event);
   }
 
-  if (!this->write_byte(REG_INT_STAT, 0x01)) {
-    ESP_LOGW(TAG, "Unable to clear key event interrupt");
-    this->status_set_warning();
+  // 检查并无条件清除所有挂起的中断标志 (K_INT / OVR_FLOW_INT / GPI_INT)
+  uint8_t int_stat = 0;
+  if (this->read_byte(REG_INT_STAT, &int_stat) && (int_stat & 0x1F) != 0) {
+    this->write_byte(REG_INT_STAT, 0x1F);
+  } else if (queued_len > 0) {
+    this->write_byte(REG_INT_STAT, 0x1F);
+  }
+
+  // FIFO 已彻底排空且 INT 脚已释放，安全分发按键回调
+  for (size_t i = 0; i < queued_len; i++) {
+    this->handle_event_(queued[i]);
   }
 }
 
 void IRAM_ATTR TCA8418Keypad::gpio_intr_(TCA8418Keypad *self) {
   self->interrupt_pending_ = true;
-  if (self->interrupt_pin_ != nullptr) {
-    self->enable_loop_soon_any_context();
-  }
 }
 
 void TCA8418Keypad::dump_config() {
@@ -125,13 +120,6 @@ void TCA8418Keypad::dump_config() {
   }
   ESP_LOGCONFIG(TAG, "  Debounce: %u ms", this->debounce_ms_);
   ESP_LOGCONFIG(TAG, "  Long Press Threshold: %u ms", this->long_press_ms_);
-  const bool has_keymap = std::any_of(this->keymap_by_code_.begin(), this->keymap_by_code_.end(),
-                                      [](char c) { return c != 0; });
-  const char *matrix_mode = "none";
-  if (has_keymap) {
-    matrix_mode = "keycode_map";
-  }
-  ESP_LOGCONFIG(TAG, "  Matrix Mode: %s", matrix_mode);
 }
 
 bool TCA8418Keypad::configure_keypad_() {
@@ -156,13 +144,20 @@ bool TCA8418Keypad::configure_keypad_() {
     return false;
   }
 
-  // Enable auto-increment and keypad event interrupts.
-  if (!this->write_byte(REG_CFG, 0x81)) {
+  // REG_CFG: AI=0 (读取 FIFO 固定地址 REG_KEY_EVENT_A=0x04！旧代码写 0x81 开 auto-increment 还写 REG_KEY_EVENT_A + i 双重递增跳过了一半按键事件！！)
+  // Bit 0 (KE_IEN) = 1: 开启按键事件中断；Bit 7 (AI) = 0: 严禁开启地址自增，否则连续读 FIFO 会跳到其他寄存器！
+  if (!this->write_byte(REG_CFG, 0x01)) {
     return false;
   }
 
-  // Clear any stale pending interrupts before normal operation.
-  if (!this->write_byte(REG_INT_STAT, 0x0F)) {
+  // 排空历史残留 FIFO 事件并清除所有中断位
+  for (int i = 0; i < 12; i++) {
+    uint8_t dummy = 0;
+    if (!this->read_byte(REG_KEY_EVENT_A, &dummy) || dummy == 0) {
+      break;
+    }
+  }
+  if (!this->write_byte(REG_INT_STAT, 0x1F)) {
     return false;
   }
 
@@ -191,8 +186,7 @@ void TCA8418Keypad::handle_event_(uint8_t event) {
   const size_t index = static_cast<size_t>(row) * this->columns_ + col;
 
   if (index < this->key_last_event_ms_.size() && this->debounce_ms_ > 0) {
-    if ((now - this->key_last_event_ms_[index]) < this->debounce_ms_) {
-      ESP_LOGV(TAG, "Ignoring debounced event row=%u col=%u", row, col);
+    if ((uint32_t)(now - this->key_last_event_ms_[index]) < this->debounce_ms_) {
       return;
     }
   }
@@ -204,17 +198,14 @@ void TCA8418Keypad::handle_event_(uint8_t event) {
       this->key_press_start_ms_[index] = now;
     } else {
       if (this->key_pressed_state_[index] && this->long_press_ms_ > 0) {
-        long_press = (now - this->key_press_start_ms_[index]) >= this->long_press_ms_;
+        long_press = (uint32_t)(now - this->key_press_start_ms_[index]) >= this->long_press_ms_;
       }
       this->key_pressed_state_[index] = false;
     }
-
     this->key_last_event_ms_[index] = now;
   }
 
-  ESP_LOGD(TAG, "Key event row=%u col=%u pressed=%s key=%c raw=%u long=%s", row, col,
-           pressed ? "true" : "false", key_char, keycode,
-           long_press ? "true" : "false");
+  ESP_LOGI(TAG, "Key row=%u col=%u code=%u pressed=%d", row, col, keycode, pressed ? 1 : 0);
 
   for (TCA8418KeypadListener *listener : this->listeners_) {
     if (pressed) {
@@ -235,8 +226,8 @@ char TCA8418Keypad::lookup_key_(uint8_t keycode, uint8_t row, uint8_t col) const
   if (keycode < this->keymap_by_code_.size() && this->keymap_by_code_[keycode] != 0) {
     return this->keymap_by_code_[keycode];
   }
-
   return 0x00;
 }
+
 }  // namespace tca8418_keypad
 }  // namespace esphome

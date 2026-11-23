@@ -67,6 +67,7 @@ class TCA8418Keypad : public Component, public i2c::I2CDevice {
   uint8_t columns_{0};
   InternalGPIOPin *interrupt_pin_{nullptr};
   volatile bool interrupt_pending_{false};
+  uint32_t last_watchdog_poll_ms_{0};
   uint32_t debounce_ms_{0};
   uint32_t long_press_ms_{0};
   std::vector<char> keymap_by_code_;
