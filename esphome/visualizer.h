@@ -240,4 +240,25 @@ inline void split_cn_text(const std::string &in, std::string &l1, std::string &l
   }
 }
 
+// 生成轻柔衰减的 880Hz + 1175Hz 双音“叮咚”提示音（16kHz 16-bit Mono，0 常驻内存）
+inline void play_chime_dingdong(esphome::speaker::Speaker *spk) {
+  if (!spk) return;
+  spk->set_audio_stream_info(esphome::audio::AudioStreamInfo(16, 1, 16000));
+  const int sr = 16000;
+  const int n1 = sr / 8; // 125ms "叮" (880Hz)
+  const int n2 = sr / 6; // 166ms "咚" (1175Hz)
+  std::vector<int16_t> pcm(n1 + n2, 0);
+  for (int i = 0; i < n1; i++) {
+    float env = (1.0f - (float)i / n1);
+    float s = std::sin(2.0f * 3.1415926f * 880.0f * i / sr) * env * 9000.0f;
+    pcm[i] = (int16_t)s;
+  }
+  for (int i = 0; i < n2; i++) {
+    float env = (1.0f - (float)i / n2);
+    float s = std::sin(2.0f * 3.1415926f * 1174.66f * i / sr) * env * 9500.0f;
+    pcm[n1 + i] = (int16_t)s;
+  }
+  spk->play(reinterpret_cast<const uint8_t *>(pcm.data()), pcm.size() * sizeof(int16_t));
+}
+
 } // namespace visualizer

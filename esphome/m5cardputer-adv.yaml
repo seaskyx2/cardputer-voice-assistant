@@ -71,12 +71,15 @@ api:
             id(alert_title) = title;
             id(alert_msg) = message;
             id(alert_start_ms) = millis();
-            id(alert_dur_ms) = 8000;
+            id(alert_dur_ms) = 10000;
             id(alert_active) = true;
             id(last_activity_ms) = millis();
             id(is_sleeping) = false;
             id(is_dimmed) = false;
             id(disp_backlight)->turn_on().set_brightness(1.0f).perform();
+            if (id(va_state) == 0 && (title.find("提醒") != std::string::npos || title.find("告警") != std::string::npos)) {
+              visualizer::play_chime_dingdong(id(echo_speaker));
+            }
             id(m5display).update();
   on_client_connected:
     - lambda: |-

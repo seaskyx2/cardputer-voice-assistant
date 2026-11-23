@@ -836,16 +836,20 @@ def notify_cardputer_alert(title: str, message: str):
         return False, str(e)
 
 def announce_cardputer_voice(message: str):
-    """通过 HA assist_satellite.announce 主动唤醒 Cardputer 开口语音播报提醒"""
+    """若配置了外部支持 TTS 的播报音箱 (REMINDER_MEDIA_PLAYER) 则同步通过 Piper 语音播报；Cardputer 本机由 notify_alert 自动亮屏+叮咚响铃"""
     if not HA_TOKEN:
         return False, "HA_TOKEN not configured"
+    target_mp = os.getenv("REMINDER_MEDIA_PLAYER", "").strip()
+    if not target_mp:
+        return True, "local_chime_only"
     try:
         headers = {"Authorization": f"Bearer {HA_TOKEN}", "Content-Type": "application/json"}
         resp = httpx.post(
-            f"{HA_URL}/api/services/assist_satellite/announce",
+            f"{HA_URL}/api/services/tts/speak",
             headers=headers,
             json={
-                "entity_id": os.getenv("CARDPUTER_SATELLITE_ID", "assist_satellite.m5cardputer_assist_satellite"),
+                "entity_id": os.getenv("TTS_ENTITY_ID", "tts.piper"),
+                "media_player_entity_id": target_mp,
                 "message": message[:120],
             },
             timeout=6.0,
